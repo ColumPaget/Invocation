@@ -1,9 +1,9 @@
-FLAGS=-g -DHAVE_LIBPAM=1
+FLAGS=-g @DEFS@
 all: invoked invoke grant test
 SERVER_OBJ=common.o peer.o appdb.o auth.o book_inout.o
 CLIENT_OBJ=common.o peer.o
 GRANT_OBJ=common.o appdb.o peer.o
-LIBS=@LIBUSEFUL_BUNDLED@ @LIBS@ -lcap -lpam
+LIBS=@LIBUSEFUL_BUNDLED@ @LIBS@ -lpam
 
 invoked: $(SERVER_OBJ) server.c @LIBUSEFUL_BUNDLED@
 	gcc $(FLAGS) -oinvoked $(SERVER_OBJ) server.c $(LIBS)

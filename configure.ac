@@ -3,12 +3,11 @@
 AC_INIT([server.c])
 
 
-
 AC_ARG_WITH(libuseful, [  --with-libuseful		use system-wide libUseful (default=auto) ], cf_system_libuseful=$withval )
 
 if test "$cf_system_libuseful" != "no"
 then
-AC_CHECK_LIB([Useful-4],GetToken,[cf_have_libUseful=yes],[cf_have_libUseful=no])
+	AC_CHECK_LIB([Useful-4],GetToken,[cf_have_libUseful=yes],[cf_have_libUseful=no])
 fi
 
 if test "$cf_have_libUseful" = "yes"
@@ -27,6 +26,29 @@ else
   AC_SUBST(LIBUSEFUL_BUNDLED,"libUseful-4/libUseful.a")
   AC_CONFIG_SUBDIRS([libUseful-4])
 fi
+
+cf_have_capabilities=no
+AC_ARG_ENABLE(capabilities, [  --enable-capabilities       enable linux capabilities support (default=no)], cf_use_capabilities=$enableval )
+if test "$cf_use_capabilities" != "no"
+then
+AC_CHECK_HEADER(sys/capability.h,cf_have_capabilities=yes,,)
+AC_CHECK_HEADER(linux/capability.h,cf_have_capabilities=yes,,)
+fi
+
+if test "$cf_have_capabilities" = "yes"
+then
+AC_CHECK_LIB(cap,cap_init,,)
+AC_DEFINE([USE_LINUX_CAPABILITIES])
+fi
+
+
+AC_ARG_ENABLE(pam, [  --enable-pam    enable Pluggable Authentication Modules (default=autodetect) ], cf_use_pam=$enableval )
+if test "$cf_use_pam" != "no"
+then
+AC_CHECK_LIB(pam, pam_start,,)
+cf_have_libpam=$ac_cv_lib_pam_pam_start
+fi
+
 
 AC_PROG_CC 
 AC_LANG_C 
