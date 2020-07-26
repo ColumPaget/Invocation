@@ -29,6 +29,8 @@ auth.o: auth.h auth.c
 book_inout.o: book_inout.h book_inout.c
 	gcc $(FLAGS) -c book_inout.c
 
+libUseful-4/libUseful.a:
+	$(MAKE) -C libUseful-4
 
 clean:
 	rm -f *.o
