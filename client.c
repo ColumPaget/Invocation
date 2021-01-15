@@ -74,7 +74,17 @@ ptr=CommandLineNext(CL);
 
 while (ptr)
 {
-	if ((*ptr=='-') || (! strchr(ptr, '='))) Args=MCatStr(Args, ptr, " ",NULL);
+	if (strcmp(ptr,"-version")==0) 
+	{
+        printf("invocation version: %s\n", VERSION);
+        exit(1);
+	}
+	else if (strcmp(ptr,"--version")==0)
+	{
+        printf("invocation version: %s\n", VERSION);
+        exit(1);
+	}
+	else if ((*ptr=='-') || (! strchr(ptr, '='))) Args=MCatStr(Args, ptr, " ",NULL);
 	else *Vars=MCatStr(*Vars, ptr, " ",NULL);
 	ptr=CommandLineNext(CL);
 }

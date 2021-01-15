@@ -525,6 +525,16 @@ while (ptr)
 {
 if (strcmp(ptr,"-nodemon")==0) Flags |= FLAG_NODEMON; 
 else if (strcmp(ptr,"-k")==0) AppFlags |= APPFLAG_KEY; 
+else if (strcmp(ptr,"-version")==0) 
+{
+	printf("invocation version: %s\n", VERSION);
+	exit(1);
+}
+else if (strcmp(ptr,"--version")==0) 
+{
+	printf("invocation version: %s\n", VERSION);
+	exit(1);
+}
 ptr=CommandLineNext(CL);
 }
 

@@ -12,7 +12,17 @@ const char *ptr;
 ptr=CommandLineNext(CL);
 while (ptr)
 {
-if (strcmp(ptr, "-u")==0) *Users=MCatStr(*Users, CommandLineNext(CL), ",", NULL);
+if (strcmp(ptr,"-version")==0) 
+{
+        printf("invocation version: %s\n", VERSION);
+        exit(1);
+}
+else if (strcmp(ptr,"--version")==0)
+{
+        printf("invocation version: %s\n", VERSION);
+        exit(1);
+}
+else if (strcmp(ptr, "-u")==0) *Users=MCatStr(*Users, CommandLineNext(CL), ",", NULL);
 else if (strcmp(ptr, "-g")==0) *Groups=MCatStr(*Groups, CommandLineNext(CL), ",", NULL);
 else if (! StrValid(*Program)) *Program=CopyStr(*Program, ptr);
 else *Grants=MCatStr(*Grants, ptr, ",", NULL);
