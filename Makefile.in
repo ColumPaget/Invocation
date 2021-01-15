@@ -2,16 +2,16 @@ FLAGS=-g @DEFS@
 all: invoked invoke grant test
 SERVER_OBJ=common.o peer.o appdb.o auth.o book_inout.o
 CLIENT_OBJ=common.o peer.o
-GRANT_OBJ=common.o appdb.o peer.o
-LIBS=@LIBUSEFUL_BUNDLED@ @LIBS@ -lpam
+GRANT_OBJ=common.o appdb.o peer.o 
+LIBS=@LIBS@ -lpam @LIBUSEFUL_BUNDLED@ 
 
 invoked: $(SERVER_OBJ) server.c @LIBUSEFUL_BUNDLED@
 	gcc $(FLAGS) -oinvoked $(SERVER_OBJ) server.c $(LIBS)
 
-invoke: $(CLIENT_OBJ) client.c
+invoke: $(CLIENT_OBJ) client.c @LIBUSEFUL_BUNDLED@ 
 	gcc $(FLAGS) -oinvoke $(CLIENT_OBJ)  client.c $(LIBS)
 
-grant: $(GRANT_OBJ) grant.c
+grant: $(GRANT_OBJ) grant.c @LIBUSEFUL_BUNDLED@ 
 	gcc $(FLAGS) -ogrant $(GRANT_OBJ) grant.c $(LIBS)
 
 common.o: common.h common.c
@@ -33,7 +33,7 @@ libUseful-4/libUseful.a:
 	$(MAKE) -C libUseful-4
 
 clean:
-	rm -f *.o
+	rm -f *.o */*.o */*.so */*.a
 
 test:
 	echo "no tests"

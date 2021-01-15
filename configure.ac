@@ -1,6 +1,13 @@
 
 
 AC_INIT([server.c])
+AC_PROG_CC 
+AC_LANG_C 
+AC_PROG_MAKE_SET 
+AC_PROG_INSTALL 
+AC_HEADER_STDC 
+AC_SYS_LARGEFILE
+
 
 
 AC_ARG_WITH(libuseful, [  --with-libuseful		use system-wide libUseful (default=auto) ], cf_system_libuseful=$withval )
@@ -49,12 +56,5 @@ AC_CHECK_LIB(pam, pam_start,,)
 cf_have_libpam=$ac_cv_lib_pam_pam_start
 fi
 
-
-AC_PROG_CC 
-AC_LANG_C 
-AC_PROG_MAKE_SET 
-AC_PROG_INSTALL 
-AC_HEADER_STDC 
-AC_SYS_LARGEFILE
 
 AC_OUTPUT(Makefile)
