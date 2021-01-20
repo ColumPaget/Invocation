@@ -6,28 +6,28 @@ GRANT_OBJ=common.o appdb.o peer.o
 LIBS=@LIBS@ -lpam @LIBUSEFUL_BUNDLED@ 
 
 invoked: $(SERVER_OBJ) server.c @LIBUSEFUL_BUNDLED@
-	gcc $(FLAGS) -oinvoked $(SERVER_OBJ) server.c $(LIBS)
+	$(CC) $(FLAGS) -oinvoked $(SERVER_OBJ) server.c $(LIBS)
 
 invoke: $(CLIENT_OBJ) client.c @LIBUSEFUL_BUNDLED@ 
-	gcc $(FLAGS) -oinvoke $(CLIENT_OBJ)  client.c $(LIBS)
+	$(CC) $(FLAGS) -oinvoke $(CLIENT_OBJ)  client.c $(LIBS)
 
 grant: $(GRANT_OBJ) grant.c @LIBUSEFUL_BUNDLED@ 
-	gcc $(FLAGS) -ogrant $(GRANT_OBJ) grant.c $(LIBS)
+	$(CC) $(FLAGS) -ogrant $(GRANT_OBJ) grant.c $(LIBS)
 
 common.o: common.h common.c
-	gcc $(FLAGS) -c common.c
+	$(CC) $(FLAGS) -c common.c
 
 peer.o: peer.h peer.c
-	gcc $(FLAGS) -c peer.c
+	$(CC) $(FLAGS) -c peer.c
 
 appdb.o: appdb.h appdb.c
-	gcc $(FLAGS) -c appdb.c
+	$(CC) $(FLAGS) -c appdb.c
 
 auth.o: auth.h auth.c
-	gcc $(FLAGS) -c auth.c
+	$(CC) $(FLAGS) -c auth.c
 
 book_inout.o: book_inout.h book_inout.c
-	gcc $(FLAGS) -c book_inout.c
+	$(CC) $(FLAGS) -c book_inout.c
 
 libUseful-4/libUseful.a:
 	$(MAKE) -C libUseful-4
