@@ -84,7 +84,7 @@ group admins,developers
 program /usr/bin/vim,/usr/bin/emacs
 ```
 
-The 'auth' config requires the user to authenticate using linux Pluggable Authentication Modules. The 'auth types' argument is a list of PAM services or configs (usually configured with files in /etc/pam.d) that can be used for authentication. An auth type of '*' means 'any authentication type'. This is not normally needed as the 'peer creds' system already confirms the remote user's identity, but it could be used to implement a secondary password for certain commands.
+The 'auth' config requires the user to authenticate using linux Pluggable Authentication Modules. The 'auth types' argument is a list of PAM services or configs (usually configured with files in /etc/pam.d) that can be used for authentication. An auth type of `*` means 'any authentication type'. This is not normally needed as the 'peer creds' system already confirms the remote user's identity, but it could be used to implement a secondary password for certain commands.
 
 
 INVOKED CONFIG FILE: RUN COMMAND
@@ -131,6 +131,68 @@ fail "No key available with this passphrase."
 }
 }  
 ```
+
+The run command can also accept argument strings that map arguments in the client request, to arguments in the invoked program. The config for these has the forms:
+
+```
+$(args)     - apply all arguments from the client request
+$(1)        - apply argument 1 from the client request
+$(2)        - apply argument 2 from the client request
+$(n)        - apply nth from the client request
+```
+
+So, for example a run command like:
+
+
+```
+run "/usr/bin/cpufreq.sh $(1)"
+```
+
+will run '/usr/bin/cpufreq' with the first argument from the client request. So, for example if the user runs:
+
+
+```
+invoke powersave
+```
+
+then the 'run' comamnd executed becomes:
+
+
+```
+/usr/bin/cpufreq.sh powersave
+```
+
+if '$(args)' were used instead of '$(1)' then any arguments on the invoke command-line would be applied, so:
+
+```
+invoke cpu5 powersave
+```
+
+would be run as:
+
+```
+/usr/bin/cpufreq.sh cpu5 powersave
+```
+
+but if only '$(1)' were used then we would run:
+
+```
+/usr/bin/cpufreq.sh cpu5
+```
+
+Note that as invoked is substituting things beginning with '$' it is required that if you want to run a command like:
+
+```
+run '/bin/sh -c "for FILE in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; echo $(1) > $FILE; done"'
+```
+
+then you must quote the '$' of '$FILE', like this:
+
+```
+run '/bin/sh -c "for FILE in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; echo $(1) > \$FILE; done"'
+```
+
+
 
 
 EXPECT SYSTEM
