@@ -77,8 +77,15 @@ int FileChangeExtension(const char *FilePath, const char *NewExt);
 int FileChOwner(const char *Path, const char *Owner);
 int FileChGroup(const char *Path, const char *Group);
 
+//change file mode. 'Mode' can be an octal number like '0666' or a string like 'rw-rw-rw'
+int FileChMod(const char *Path, const char *Mode);
+
 //modify time access and modification times to imply it's been modified just now
 int FileTouch(const char *Path);
+
+
+int FileSystemParsePermissions(const char *Permissions);
+
 
 //mount a file system. 'Type' is the filesystem type (ext2, xfs, etc). If 'Type' is set to 'bind' then
 //on linux a 'bind mount' is performed. This mounts a directory onto another directory. In this case
@@ -135,6 +142,8 @@ int FileSetXAttr(const char *Path, const char *Name, const char *Value);
 int FileSystemCopyDir(const char *Src, const char *Dest);
 
 int FileSystemRmDir(const char *Dir);
+
+
 
 #ifdef __cplusplus
 }

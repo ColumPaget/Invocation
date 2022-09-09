@@ -25,6 +25,19 @@ and the following 'tilde command' formatting values
 ~M        switch background to magenta
 ~c        switch color to cyan
 ~C        switch background to cyan
+~+R       switch background to bright red
+~+g       switch color to bright green
+~+G       switch background to bright green
+~+b       switch color to bright blue
+~+B       switch background to bright blue
+~+n       switch color to bright black ('night' or 'noir')
+~+N       switch background to bright black ('night' or 'noir')
+~+y       switch color to bright yellow
+~+Y       switch background to bright yellow
+~+m       switch color to bright magenta
+~+M       switch background to bright magenta
+~+c       switch color to bright cyan
+~+C       switch background to bright cyan
 ~e        switch to bold text
 ~i        switch to inverse text
 ~u        switch to underlined text
@@ -96,11 +109,15 @@ extern "C" {
 #endif
 
 //These values are passed as Color and BgColor to ANSICode to produce escape sequences with those colors
-typedef enum {ANSI_NONE, ANSI_BLACK, ANSI_RED, ANSI_GREEN, ANSI_YELLOW, ANSI_BLUE, ANSI_MAGENTA, ANSI_CYAN, ANSI_WHITE, ANSI_RESET, ANSI_RESET2, ANSI_DARKGREY, ANSI_LIGHTRED, ANSI_LIGHTGREEN, ANSI_LIGHTYELLOW, ANSI_LIGHTBLUE, ANSI_LIGHTMAGENTA, ANSI_LIGHTCYAN, ANSI_LIGHTWHITE} T_ANSI_COLORS;
+typedef enum {ANSI_NONE, ANSI_BLACK, ANSI_RED, ANSI_GREEN, ANSI_YELLOW, ANSI_BLUE, ANSI_MAGENTA, ANSI_CYAN, ANSI_WHITE, ANSI_RESET, ANSI_RESET2, ANSI_DARKGREY,  ANSI_LIGHTRED, ANSI_LIGHTGREEN, ANSI_LIGHTYELLOW, ANSI_LIGHTBLUE, ANSI_LIGHTMAGENTA, ANSI_LIGHTCYAN, ANSI_LIGHTWHITE} T_ANSI_COLORS;
+
 
 
 
 //These flags are mostly used internally
+
+#define TERM_AUTODETECT -1
+
 #define TERM_HIDETEXT  1   //hide text (default is show it)
 #define TERM_SHOWSTARS 2   //show stars instead of text (for passwords)
 #define TERM_SHOWTEXTSTARS 4 //show stars+last character typed
@@ -151,6 +168,9 @@ int ANSIParseColor(const char *Str);
 // Flags can include TERM_HIDECURSOR, to start with cursor hidden, TERM_RAWKEYS to disable 'canonical' mode and get raw keystrokes
 // and TERM_BOTTOMBAR to create a region at the bottom of the screen to hold an information or input bar
 int TerminalInit(STREAM *S, int Flags);
+
+// Initalize stream to be a terminal using 'Config' 
+void TerminalSetup(STREAM *S, const char *Config);
 
 // Specify if system supports utf8. This is global for all terminals. 'level' can be
 //   0 - not supported
@@ -221,6 +241,11 @@ const char *TerminalFormatSubStr(const char *Str, char **RetStr, STREAM *Term);
 
 //'Str' is a format string with 'tilde commands' in it. The ANSI coded result is output to stream S
 void TerminalPutStr(const char *Str, STREAM *S);
+
+
+
+//step past a single character. Understands tilde-strings and (some) unicode, consuming them as one character
+int TerminalConsumeCharacter(const char **ptr);
 
 //calculate length of string *after ANSI formating*, so ANSI escape sequences don't count as characters added
 //to the length 

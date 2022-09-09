@@ -68,7 +68,6 @@ void TerminalMenuDraw(TERMMENU *Menu)
 
         Contents=ReplaceStr(Contents, Curr->Tag, "~0", p_Attribs);
         Contents=TerminalStrTrunc(Contents, Menu->wid-4);
-
         Tempstr=MCopyStr(Tempstr, p_Attribs, p_Cursor, Contents, NULL);
 
         Output=CopyStr(Output, "");
@@ -91,8 +90,9 @@ void TerminalMenuDraw(TERMMENU *Menu)
 
     Tempstr=CopyStr(Tempstr, "");
     Tempstr=PadStrTo(Tempstr, ' ', Menu->wid);
-    while (y < yend)
+    while (y <= yend)
     {
+        TerminalCursorMove(Menu->Term, Menu->x, y);
         STREAMWriteString(Tempstr, Menu->Term);
         y++;
     }
@@ -105,26 +105,53 @@ void TerminalMenuDraw(TERMMENU *Menu)
 }
 
 
+ListNode *TerminalMenuTop(TERMMENU *Menu)
+{
+    Menu->Options->Side=ListGetNext(Menu->Options);
+
+    return(Menu->Options->Side);
+}
+
+ListNode *TerminalMenuUp(TERMMENU *Menu)
+{
+    if (Menu->Options->Side)
+    {
+        if (Menu->Options->Side->Prev && (Menu->Options->Side->Prev != Menu->Options)) Menu->Options->Side=Menu->Options->Side->Prev;
+    }
+    else Menu->Options->Side=ListGetNext(Menu->Options);
+
+    return(Menu->Options->Side);
+}
+
+ListNode *TerminalMenuDown(TERMMENU *Menu)
+{
+    if (Menu->Options->Side)
+    {
+        if (Menu->Options->Side->Next) Menu->Options->Side=Menu->Options->Side->Next;
+    }
+    else Menu->Options->Side=ListGetNext(Menu->Options);
+
+    return(Menu->Options->Side);
+}
+
 ListNode *TerminalMenuOnKey(TERMMENU *Menu, int key)
 {
     int i;
 
     switch (key)
     {
+    case TKEY_HOME:
+        TerminalMenuTop(Menu);
+        break;
+
     case TKEY_UP:
-        if (Menu->Options->Side)
-        {
-            if (Menu->Options->Side->Prev && (Menu->Options->Side->Prev != Menu->Options)) Menu->Options->Side=Menu->Options->Side->Prev;
-        }
-        else Menu->Options->Side=ListGetNext(Menu->Options);
+    case TKEY_CTRL_W:
+        TerminalMenuUp(Menu);
         break;
 
     case TKEY_DOWN:
-        if (Menu->Options->Side)
-        {
-            if (Menu->Options->Side->Next) Menu->Options->Side=Menu->Options->Side->Next;
-        }
-        else Menu->Options->Side=ListGetNext(Menu->Options);
+    case TKEY_CTRL_S:
+        TerminalMenuDown(Menu);
         break;
 
     case TKEY_PGUP:
@@ -137,7 +164,6 @@ ListNode *TerminalMenuOnKey(TERMMENU *Menu, int key)
             else Menu->Options->Side=ListGetPrev(Menu->Options);
         }
         break;
-
 
     case TKEY_PGDN:
         for (i=0; i < Menu->high; i++)
@@ -161,6 +187,7 @@ ListNode *TerminalMenuOnKey(TERMMENU *Menu, int key)
 
     case '\r':
     case '\n':
+    case TKEY_CTRL_D:
         return(Menu->Options->Side);
         break;
     }
@@ -181,7 +208,7 @@ ListNode *TerminalMenuProcess(TERMMENU *Menu)
     key=TerminalReadChar(Menu->Term);
     while (1)
     {
-        if (key == ESCAPE)
+        if ((key == ESCAPE) || (key == TKEY_CTRL_A))
         {
             Node=NULL;
             break;
@@ -203,17 +230,39 @@ ListNode *TerminalMenu(STREAM *Term, ListNode *Options, int x, int y, int wid, i
     int key;
 
     Menu=TerminalMenuCreate(Term, x, y, wid, high);
-    Menu->Options->Flags = Options->Flags;
-    Node=ListGetNext(Options);
-    while (Node)
-    {
-        ListAddNamedItem(Menu->Options, Node->Tag, NULL);
-        Node=ListGetNext(Node);
-    }
-    Menu->Options->Side=ListGetNext(Menu->Options);
-
+    Menu->Options = Options;
+    if (! Menu->Options->Side) Menu->Options->Side=ListGetNext(Menu->Options);
     Node=TerminalMenuProcess(Menu);
+    Menu->Options=NULL;
 
     TerminalMenuDestroy(Menu);
     return(Node);
+}
+
+
+char *TerminalMenuFromText(char *RetStr, STREAM *Term, const char *Options, int x, int y, int wid, int high)
+{
+    ListNode *MenuList, *Node;
+    const char *ptr;
+    char *Token=NULL;
+
+    MenuList=ListCreate();
+    ptr=GetToken(Options, "|", &Token, 0);
+    while (ptr)
+    {
+        ListAddNamedItem(MenuList, Token, NULL);
+        ptr=GetToken(ptr, "|", &Token, 0);
+    }
+
+    Node=TerminalMenu(Term, MenuList, x, y, wid, high);
+    if (Node) RetStr=CopyStr(RetStr, Node->Tag);
+    else
+    {
+        Destroy(RetStr);
+        RetStr=NULL;
+    }
+    ListDestroy(MenuList, Destroy);
+    Destroy(Token);
+
+    return(RetStr);
 }

@@ -8,9 +8,96 @@
 
 static const char *ANSIColorStrings[]= {"none","black","red","green","yellow","blue","magenta","cyan","white",NULL};
 
-TMouseEvent MouseEvent;
 
 
+//Used internally by TerminalStrLen and TerminalStrTrunc this reads through a string and handles
+//escaped characters (\n \b) that seem to be two chars, but are really 1, unicode strings, that
+//see to be 2 or 3 characters, but area really 1, and 'tilde format' strings that describe colors
+//and other terminal actions, which again seem to be 2 characters, but are really 1. If this function
+//encounters something like '~r' which specifies following text is colored red, and which doesn't encode
+//actual characters, it returns false. If it encounters anyting that does encode an actual character,
+//including an actual character, it returns true
+
+int TerminalConsumeCharacter(const char **ptr)
+{
+    int IsRealChar=FALSE;
+
+
+    switch (**ptr)
+    {
+    case '~':
+        ptr_incr(ptr, 1);
+        switch (**ptr)
+        {
+        case '+':
+            ptr_incr(ptr, 1);
+            break;  // 'bright' colors, in the form ~+r so eat one more char
+        case '=':
+            ptr_incr(ptr, 1);
+            break;  // 'fill with char' in the form ~=x (where 'x' is any char) so eat one more char
+        case '~':
+            IsRealChar=TRUE;
+            break;  //~~ translates to ~, one character
+        case ':':
+            IsRealChar=TRUE;
+            break;  //named unicode glyph. one character
+        case 'U':                           //16-bit unicode number. one character encoded as a 4-char hex string
+            ptr_incr(ptr, 4);
+            IsRealChar=TRUE;
+            break;
+        }
+        break;
+
+    case '\\':
+        ptr_incr(ptr, 1);
+        switch (**ptr)
+        {
+        case '\0':
+            break;
+
+        //octal value
+        case '0':
+            ptr_incr(ptr, 4);
+            IsRealChar=TRUE;
+            break;
+
+        //hex value in form
+        case 'x':
+            ptr_incr(ptr, 3);
+            IsRealChar=TRUE;
+            break;
+
+        default:
+            IsRealChar=TRUE;
+            break;
+        }
+        break;
+
+    default:
+        //handle unicode
+        if (**ptr & 128)
+        {
+            switch (**ptr & 224)
+            {
+            case 224:
+                ptr_incr(ptr, 1);
+            case 192:
+                ptr_incr(ptr, 1);
+            }
+
+            IsRealChar=TRUE;
+        }
+        else IsRealChar=TRUE;
+        break;
+    }
+
+    return(IsRealChar);
+}
+
+
+
+//this allows us to specify a maximum length to stop counting at
+//which is useful for some internal processes
 static int TerminalInternalStrLen(const char **Str, int MaxLen)
 {
     const char *ptr;
@@ -20,58 +107,7 @@ static int TerminalInternalStrLen(const char **Str, int MaxLen)
 
     for (ptr=*Str; *ptr !='\0'; ptr++)
     {
-        if (*ptr & 128)
-        {
-            switch (*ptr & 224)
-            {
-            case 224:
-                ptr_incr(&ptr, 1);
-            case 192:
-                ptr_incr(&ptr, 1);
-            }
-
-            len++;
-        }
-        else if (*ptr=='~')
-        {
-            ptr_incr(&ptr, 1);
-            if (*ptr=='~') len++; //~~ translates to ~, one character
-            else if (*ptr==':')
-            {
-                len++; //named unicode glyph. one character
-            }
-            else if (*ptr=='U')
-            {
-                ptr_incr(&ptr, 4);
-                len++; //16-bit unicode number. one character
-            }
-        }
-        else if (*ptr=='\\')
-        {
-            ptr_incr(&ptr, 1);
-            switch (*ptr)
-            {
-            case '\0':
-                break;
-
-            //octal value
-            case '0':
-                ptr_incr(&ptr, 4);
-                len++;
-                break;
-
-            //hex value
-            case 'x':
-                ptr_incr(&ptr, 3);
-                len++;
-                break;
-
-            default:
-                len++;
-                break;
-            }
-        }
-        else len++;
+        if (TerminalConsumeCharacter(&ptr)) len++;
 
         if ((MaxLen != -1) && (len > MaxLen))
         {
@@ -96,13 +132,21 @@ int TerminalStrLen(const char *Str)
 
 char *TerminalStrTrunc(char *Str, int MaxLen)
 {
-    const char *ptr;
+    char *ptr;
     int len=0;
 
     ptr=Str;
-    len=TerminalInternalStrLen(&ptr, MaxLen);
+    for (ptr=Str; *ptr !='\0'; ptr++)
+    {
+        if (TerminalConsumeCharacter((const char **) &ptr)) len++;
+        if (len > MaxLen)
+        {
+            *ptr='\0';
+            StrLenCacheAdd(Str, len);
+            break;
+        }
+    }
 
-    if (len > MaxLen) Str=StrTrunc(Str, ptr+1-Str);
 
     return(Str);
 }
@@ -119,13 +163,13 @@ char *ANSICode(int Color, int BgColor, int Flags)
 
     if (Color > 0)
     {
-        if (Color >= ANSI_DARKGREY) FgVal=90+Color - ANSI_DARKGREY;
+        if (Color >= ANSI_DARKGREY) FgVal=90+Color - ANSI_DARKGREY -1;
         else FgVal=30+Color-1;
     }
 
     if (BgColor > 0)
     {
-        if (BgColor >= ANSI_DARKGREY) BgVal=100+BgColor - ANSI_DARKGREY;
+        if (BgColor >= ANSI_DARKGREY) BgVal=100+BgColor - ANSI_DARKGREY -1;
         else BgVal=40+BgColor-1;
     }
 
@@ -174,9 +218,112 @@ const char *TerminalTranslateKeyCode(int key)
     {
     case 0:
         return("NUL");
+        break;
+
+    case TKEY_TAB:
+        return("	");
+        break;
+
+    case TKEY_BACKSPACE:
+        return("BACKSPACE");
+        break;
+
     case ESCAPE:
         return("ESC");
         break;
+
+    case TKEY_CTRL_A:
+        return("CTRL_A");
+        break;
+    case TKEY_CTRL_B:
+        return("CTRL_B");
+        break;
+    case TKEY_CTRL_C:
+        return("CTRL_C");
+        break;
+    case TKEY_CTRL_D:
+        return("CTRL_D");
+        break;
+    case TKEY_CTRL_E:
+        return("CTRL_E");
+        break;
+    case TKEY_CTRL_F:
+        return("CTRL_F");
+        break;
+    case TKEY_CTRL_G:
+        return("CTRL_G");
+        break;
+
+    /* NEVER RETURN CTRL_H, as this is backspace!
+        case TKEY_CTRL_H:
+    	return("CTRL_H");
+        break;
+    */
+
+    /* NEVER RETURN CTRL_I, as this is tab!
+        case TKEY_CTRL_I:
+    	return("CTRL_I");
+        break;
+    */
+
+    /* NEVER RETURN CTRL_J, as this is LINEFEED/ENTER
+        case TKEY_CTRL_J:
+    	return("CTRL_J");
+        break;
+    */
+
+    case TKEY_CTRL_K:
+        return("CTRL_K");
+        break;
+    case TKEY_CTRL_L:
+        return("CTRL_L");
+        break;
+
+    /* NEVER RETURN CTRL-M, as this is carriage return!
+        case TKEY_CTRL_M:
+    	return("CTRL_M");
+        break;
+    */
+    case TKEY_CTRL_N:
+        return("CTRL_N");
+        break;
+    case TKEY_CTRL_O:
+        return("CTRL_O");
+        break;
+    case TKEY_CTRL_P:
+        return("CTRL_P");
+        break;
+    case TKEY_CTRL_Q:
+        return("CTRL_Q");
+        break;
+    case TKEY_CTRL_R:
+        return("CTRL_R");
+        break;
+    case TKEY_CTRL_S:
+        return("CTRL_S");
+        break;
+    case TKEY_CTRL_T:
+        return("CTRL_T");
+        break;
+    case TKEY_CTRL_U:
+        return("CTRL_U");
+        break;
+    case TKEY_CTRL_V:
+        return("CTRL_V");
+        break;
+    case TKEY_CTRL_W:
+        return("CTRL_W");
+        break;
+    case TKEY_CTRL_X:
+        return("CTRL_X");
+        break;
+    case TKEY_CTRL_Y:
+        return("CTRL_Y");
+        break;
+    case TKEY_CTRL_Z:
+        return("CTRL_Z");
+        break;
+
     case TKEY_F1:
         return("F1");
         break;
@@ -639,21 +786,32 @@ int TerminalTranslateKeyStrWithMod(const char *str, int *mod)
 //read as many modifiers as are found, then break
     while (1)
     {
-        if (strncasecmp(str, "shift-", 6)==0)
+        if ( (strncasecmp(str, "shift-", 6)==0) || (strncasecmp(str, "shift_", 6)==0))
         {
             if (mod !=NULL) *mod |= KEYMOD_SHIFT;
             str+=6;
         }
-        else if (strncasecmp(str, "ctrl-", 5)==0)
+        else if ((strncasecmp(str, "ctrl-", 5)==0) || (strncasecmp(str, "ctrl_", 5)==0))
         {
             if (mod !=NULL) *mod |= KEYMOD_CTRL;
             str+=5;
         }
-        else if (strncasecmp(str, "alt-", 4)==0)
+        else if ((strncasecmp(str, "alt-", 4)==0) || (strncasecmp(str, "alt_", 4)==0))
         {
             if (mod !=NULL) *mod |= KEYMOD_ALT;
             str+=4;
         }
+        else if ((strncasecmp(str, "lalt-", 4)==0) || (strncasecmp(str, "lalt_", 4)==0))
+        {
+            if (mod !=NULL) *mod |= KEYMOD_ALT;
+            str+=5;
+        }
+        else if ((strncasecmp(str, "ralt-", 4)==0) || (strncasecmp(str, "ralt_", 4)==0))
+        {
+            if (mod !=NULL) *mod |= KEYMOD_ALT2;
+            str+=5;
+        }
+
         else break;
     }
 
@@ -812,6 +970,14 @@ int TerminalTranslateKeyStrWithMod(const char *str, int *mod)
 
     }
 
+    //if control is pressed, and the key is an alphabetic character, then
+    //convert it to a control char
+
+    if ((*mod & KEYMOD_CTRL) && (*str > 65) && (*str < 122))
+    {
+        *mod=0; //do not add a mod for these, as the character code alone implies it
+        return((tolower(*str) - 'a') +1);
+    }
     return((int) *str);
 }
 
@@ -830,19 +996,38 @@ int TerminalTranslateKeyStr(const char *str)
 void TerminalGeometry(STREAM *S, int *wid, int *len)
 {
     struct winsize w;
+    const char *ptr;
+    int val=0;
 
+    memset(&w,0,sizeof(struct winsize));
     ioctl(S->out_fd, TIOCGWINSZ, &w);
+
+    ptr=STREAMGetValue(S, "Terminal:force_cols");
+    if (StrValid(ptr))
+    {
+    val=atoi(ptr);
+    if (val > 0) w.ws_col=val;
+    }
+
+    ptr=STREAMGetValue(S, "Terminal:force_rows");
+    if (StrValid(ptr))
+    {
+    val=atoi(ptr);
+    if (val > 0) w.ws_row=val;
+    }
 
     *wid=w.ws_col;
     *len=w.ws_row;
 }
 
 
-void TerminalInternalConfig(const char *Config, int *ForeColor, int *BackColor, int *Flags)
+void TerminalInternalConfig(const char *Config, int *ForeColor, int *BackColor, int *Flags, int *width, int *height)
 {
     char *Name=NULL, *Value=NULL;
     const char *ptr;
 
+    *width=TERM_AUTODETECT;
+    *height=TERM_AUTODETECT;
 
     ptr=GetNameValuePair(Config, " ","=",&Name,&Value);
     while (ptr)
@@ -878,6 +1063,7 @@ void TerminalInternalConfig(const char *Config, int *ForeColor, int *BackColor, 
         case 'H':
             if (strcasecmp(Name, "hidecursor") ==0) *Flags |= TERM_HIDECURSOR;
             if (strcasecmp(Name,"hidetext")==0) *Flags |= TERM_HIDETEXT;
+            if (strcasecmp(Name,"height")==0) *height=atoi(Value);
             break;
 
         case 'm':
@@ -907,6 +1093,7 @@ void TerminalInternalConfig(const char *Config, int *ForeColor, int *BackColor, 
         case 'w':
         case 'W':
             if (strcasecmp(Name,"wheelmouse")==0) *Flags=TERM_WHEELMOUSE;
+            if (strcasecmp(Name,"width")==0) *width=atoi(Value);
             break;
         }
 
@@ -1038,6 +1225,88 @@ char *TerminalCommandStr(char *RetStr, int Cmd, int Arg1, int Arg2)
 }
 
 
+
+
+char *TerminalColorCommandStr(char *RetStr, char inchar, int offset)
+{
+
+    switch (inchar)
+    {
+    case 'r':
+        RetStr=TerminalCommandStr(RetStr, TERM_COLOR, ANSI_RED + offset, 0);
+        break;
+    case 'R':
+        RetStr=TerminalCommandStr(RetStr, TERM_COLOR, 0, ANSI_RED + offset);
+        break;
+    case 'g':
+        RetStr=TerminalCommandStr(RetStr, TERM_COLOR, ANSI_GREEN + offset, 0);
+        break;
+    case 'G':
+        RetStr=TerminalCommandStr(RetStr, TERM_COLOR, 0, ANSI_GREEN + offset);
+        break;
+    case 'b':
+        RetStr=TerminalCommandStr(RetStr, TERM_COLOR, ANSI_BLUE + offset, 0);
+        break;
+    case 'B':
+        RetStr=TerminalCommandStr(RetStr, TERM_COLOR, 0, ANSI_BLUE + offset);
+        break;
+    case 'n':
+        RetStr=TerminalCommandStr(RetStr, TERM_COLOR, ANSI_BLACK + offset, 0);
+        break;
+    case 'N':
+        RetStr=TerminalCommandStr(RetStr, TERM_COLOR, 0, ANSI_BLACK + offset);
+        break;
+    case 'w':
+        RetStr=TerminalCommandStr(RetStr, TERM_COLOR, ANSI_WHITE + offset, 0);
+        break;
+    case 'W':
+        RetStr=TerminalCommandStr(RetStr, TERM_COLOR, 0, ANSI_WHITE + offset);
+        break;
+    case 'y':
+        RetStr=TerminalCommandStr(RetStr, TERM_COLOR, ANSI_YELLOW + offset, 0);
+        break;
+    case 'Y':
+        RetStr=TerminalCommandStr(RetStr, TERM_COLOR, 0, ANSI_YELLOW + offset);
+        break;
+    case 'm':
+        RetStr=TerminalCommandStr(RetStr, TERM_COLOR, ANSI_MAGENTA + offset, 0);
+        break;
+    case 'M':
+        RetStr=TerminalCommandStr(RetStr, TERM_COLOR, 0, ANSI_MAGENTA + offset);
+        break;
+    case 'c':
+        RetStr=TerminalCommandStr(RetStr, TERM_COLOR, ANSI_CYAN + offset, 0);
+        break;
+    case 'C':
+        RetStr=TerminalCommandStr(RetStr, TERM_COLOR, 0, ANSI_CYAN + offset);
+        break;
+    }
+
+    return(RetStr);
+}
+
+
+
+char *TerminalFillToEndOfLine(char *RetStr, int fill_char, STREAM *Term)
+{
+    const char *ptr=NULL;
+    int i,twide, thigh;
+    int len=0;
+
+    if (StrValid(RetStr))
+    {
+        ptr=strrchr(RetStr, '\n');
+        if (ptr) ptr++;
+        else ptr=RetStr;
+        len=TerminalStrLen(ptr);
+    }
+
+    TerminalGeometry(Term, &twide, &thigh);
+    for (i=len; i < twide; i++) RetStr=AddCharToStr(RetStr, fill_char);
+
+    return(RetStr);
+}
+
 const char *TerminalFormatSubStr(const char *Str, char **RetStr, STREAM *Term)
 {
     const char *ptr, *end;
@@ -1099,54 +1368,30 @@ const char *TerminalFormatSubStr(const char *Str, char **RetStr, STREAM *Term)
             case '~':
                 *RetStr=AddCharToStr(*RetStr, *ptr);
                 break;
+            case '+':
+                ptr++;
+                *RetStr=TerminalColorCommandStr(*RetStr, *ptr, ANSI_DARKGREY);
+                break;
+
             case 'r':
-                *RetStr=TerminalCommandStr(*RetStr, TERM_COLOR, ANSI_RED, 0);
-                break;
             case 'R':
-                *RetStr=TerminalCommandStr(*RetStr, TERM_COLOR, 0, ANSI_RED);
-                break;
             case 'g':
-                *RetStr=TerminalCommandStr(*RetStr, TERM_COLOR, ANSI_GREEN, 0);
-                break;
             case 'G':
-                *RetStr=TerminalCommandStr(*RetStr, TERM_COLOR, 0, ANSI_GREEN);
-                break;
             case 'b':
-                *RetStr=TerminalCommandStr(*RetStr, TERM_COLOR, ANSI_BLUE, 0);
-                break;
             case 'B':
-                *RetStr=TerminalCommandStr(*RetStr, TERM_COLOR, 0, ANSI_BLUE);
-                break;
-            case 'n':
-                *RetStr=TerminalCommandStr(*RetStr, TERM_COLOR, ANSI_BLACK, 0);
-                break;
-            case 'N':
-                *RetStr=TerminalCommandStr(*RetStr, TERM_COLOR, 0, ANSI_BLACK);
-                break;
-            case 'w':
-                *RetStr=TerminalCommandStr(*RetStr, TERM_COLOR, ANSI_WHITE, 0);
-                break;
-            case 'W':
-                *RetStr=TerminalCommandStr(*RetStr, TERM_COLOR, 0, ANSI_WHITE);
-                break;
             case 'y':
-                *RetStr=TerminalCommandStr(*RetStr, TERM_COLOR, ANSI_YELLOW, 0);
-                break;
             case 'Y':
-                *RetStr=TerminalCommandStr(*RetStr, TERM_COLOR, 0, ANSI_YELLOW);
-                break;
             case 'm':
-                *RetStr=TerminalCommandStr(*RetStr, TERM_COLOR, ANSI_MAGENTA, 0);
-                break;
             case 'M':
-                *RetStr=TerminalCommandStr(*RetStr, TERM_COLOR, 0, ANSI_MAGENTA);
-                break;
             case 'c':
-                *RetStr=TerminalCommandStr(*RetStr, TERM_COLOR, ANSI_CYAN, 0);
-                break;
             case 'C':
-                *RetStr=TerminalCommandStr(*RetStr, TERM_COLOR, 0, ANSI_CYAN);
+            case 'w':
+            case 'W':
+            case 'n':
+            case 'N':
+                *RetStr=TerminalColorCommandStr(*RetStr, *ptr, 0);
                 break;
+
             case 'e':
                 *RetStr=TerminalCommandStr(*RetStr, TERM_TEXT, ANSI_BOLD, 0);
                 break;
@@ -1164,6 +1409,10 @@ const char *TerminalFormatSubStr(const char *Str, char **RetStr, STREAM *Term)
                 break;
             case '>':
                 *RetStr=TerminalCommandStr(*RetStr, TERM_CLEAR_ENDLINE, 0, 0);
+                break;
+            case '=':
+                ptr++;
+                *RetStr=TerminalFillToEndOfLine(*RetStr, *ptr, Term);
                 break;
             case '|':
                 Tempstr=CopyStr(Tempstr, "");
@@ -1511,7 +1760,7 @@ static int TerminalReadCSISeqSemicolon2(STREAM *S)
 
 
 
-int TerminalReadCSISeqSemicolon(STREAM *S, int val)
+static int TerminalReadCSISeqSemicolon(STREAM *S, int val)
 {
     int inchar;
 
@@ -1955,16 +2204,16 @@ static int TerminalReadCSISeq(STREAM *S, char PrevChar)
 }
 
 
-int TerminalReadCSIMouse(STREAM *S)
+static int TerminalReadCSIMouse(STREAM *S)
 {
     char *Tempstr=NULL;
-    int flags, val, keycode=0;
+    int flags, x, y, val, keycode=0;
 
-    MouseEvent.flags=STREAMReadChar(S)-32;
-    MouseEvent.x=STREAMReadChar(S)-32;
-    MouseEvent.y=STREAMReadChar(S)-32;
+    flags=STREAMReadChar(S)-32;
+    x=STREAMReadChar(S)-32;
+    y=STREAMReadChar(S)-32;
 
-    switch (MouseEvent.flags)
+    switch (flags)
     {
     case 0:
         keycode=MOUSE_BTN_1;
@@ -1986,7 +2235,8 @@ int TerminalReadCSIMouse(STREAM *S)
         break;
     }
 
-    MouseEvent.button=keycode;
+    Tempstr=FormatStr(Tempstr, "%d:%d:%d", keycode, x, y);
+    STREAMSetValue(S, "LU_MouseEvent", Tempstr);
 
     Destroy(Tempstr);
 
@@ -2229,10 +2479,22 @@ char *TerminalReadText(char *RetStr, int Flags, STREAM *S)
 
 char *TerminalReadPrompt(char *RetStr, const char *Prompt, int Flags, STREAM *S)
 {
-    TerminalPutStr("\r~>",S);
+    int TTYFlags=0;
+
+    TerminalPutStr("~>",S);
     TerminalPutStr(Prompt, S);
     STREAMFlush(S);
-    return(TerminalReadText(RetStr, Flags, S));
+    if (Flags & (TERM_HIDETEXT | TERM_SHOWSTARS | TERM_SHOWTEXTSTARS))
+    {
+        TTYFlags=TTYGetConfig(S->in_fd);
+        TTYSetEcho(S->in_fd, FALSE);
+        TTYSetCanonical(S->in_fd, FALSE);
+    }
+    RetStr=TerminalReadText(RetStr, Flags, S);
+    if (TTYFlags & TTYFLAG_ECHO) TTYSetEcho(S->in_fd, TRUE);
+    if (TTYFlags & TTYFLAG_CANON) TTYSetCanonical(S->in_fd, TRUE);
+
+    return(RetStr);
 }
 
 
@@ -2269,10 +2531,26 @@ int TerminalInit(STREAM *S, int Flags)
 
 void TerminalSetup(STREAM *S, const char *Config)
 {
-    int Flags=0, FColor, BColor;
+    int Flags=0, FColor, BColor, width, height;
+    char *Tempstr=NULL;
 
-    TerminalInternalConfig(Config, &FColor, &BColor, &Flags);
+    TerminalInternalConfig(Config, &FColor, &BColor, &Flags, &width, &height);
+
+    if (width > TERM_AUTODETECT)
+    {
+        Tempstr=FormatStr(Tempstr, "%d", width);
+        STREAMSetValue(S, "Terminal:force_cols", Tempstr);
+    }
+
+    if (height > TERM_AUTODETECT)
+    {
+        Tempstr=FormatStr(Tempstr, "%d", height);
+        STREAMSetValue(S, "Terminal:force_rows", Tempstr);
+    }
+
     TerminalInit(S, Flags);
+
+    Destroy(Tempstr);
 }
 
 
@@ -2304,5 +2582,18 @@ void TerminalSetKeyCallback(STREAM *Term, TKEY_CALLBACK_FUNC Func)
 
 TMouseEvent *TerminalGetMouse(STREAM *Term)
 {
+    static TMouseEvent MouseEvent;
+    char *ptr;
+
+    ptr=(char *) STREAMGetValue(Term, "LU_MouseEvent");
+    if (! StrValid(ptr)) return NULL;
+
+    MouseEvent.button=strtol(ptr, &ptr, 10);
+    if (*ptr==':') ptr++;
+    MouseEvent.x=strtol(ptr, &ptr, 10);
+    if (*ptr==':') ptr++;
+    MouseEvent.y=strtol(ptr, &ptr, 10);
+    if (*ptr==':') ptr++;
+
     return(&MouseEvent);
 }

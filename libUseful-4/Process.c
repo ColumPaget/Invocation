@@ -107,6 +107,17 @@ int ProcessSetCapabilities(const char *CapNames)
 }
 
 
+//Set controlling tty to be fd.
+//This means that CTRL-C, SIGWINCH etc is handled for the selected fd
+//and not any other
+void ProcessSetControlTTY(int fd)
+{
+// TIOCSCTTY doesn't seem to exist under macosx!
+#ifdef TIOCSCTTY
+    ioctl(fd,TIOCSCTTY,0);
+#endif
+}
+
 
 //The command-line args that we've been passed (argv) will occupy a block of contiguous memory that
 //contains these args and the environment strings. In order to change the command-line args we isolate
@@ -115,7 +126,7 @@ int ProcessSetCapabilities(const char *CapNames)
 //block of memory with our new command-line arguments.
 void ProcessTitleCaptureBuffer(char **argv)
 {
-    char *end=NULL, *tmp;
+    char *end=NULL;
     int i;
 
     TitleBuffer=*argv;
@@ -228,7 +239,7 @@ int WritePidFile(const char *ProgName)
 
 //Don't close 'fd'!
 
-    DestroyString(Tempstr);
+    Destroy(Tempstr);
 
     return(fd);
 }
@@ -247,8 +258,15 @@ void CloseOpenFiles()
 
 int SwitchUID(int uid)
 {
-    const char *ptr;
     struct passwd *pw;
+
+    pw=getpwuid(uid);
+
+    //must initgroups before switch user, as the user we switch too
+    //may not have permission to do so
+#ifdef HAVE_INITGROUPS
+    if (pw) initgroups(pw->pw_name, 0);
+#endif
 
 #ifdef HAVE_SETRESUID
     if ((uid==-1) || (setresuid(uid,uid,uid) !=0))
@@ -260,13 +278,13 @@ int SwitchUID(int uid)
         if (LibUsefulGetBool("SwitchUserAllowFail")) return(FALSE);
         exit(1);
     }
-    pw=getpwuid(uid);
+
     if (pw)
     {
         setenv("HOME",pw->pw_dir,TRUE);
         setenv("USER",pw->pw_name,TRUE);
-    }
 
+    }
     return(TRUE);
 }
 
@@ -283,8 +301,6 @@ int SwitchUser(const char *NewUser)
 
 int SwitchGID(int gid)
 {
-    const char *ptr;
-
     if ((gid==-1) || (setgid(gid) !=0))
     {
         RaiseError(ERRFLAG_ERRNO, "SwitchGID", "Switch group failed. gid=%d",gid);
@@ -337,11 +353,8 @@ void InitSigHandler(int sig)
 
 void ProcessContainerInit(int tunfd, int linkfd, pid_t Child, int RemoveRootDir)
 {
-    int i;
     ListNode *Connections=NULL;
     STREAM *TunS=NULL, *LinkS=NULL, *S;
-    char *Token=NULL;
-    const char *ptr;
     struct sigaction sa;
 
     /* //this feature not working yet
@@ -433,7 +446,7 @@ int JoinNamespace(const char *Namespace, int type)
     RaiseError(0, "namespaces", "setns unavailable");
 #endif
 
-    DestroyString(Tempstr);
+    Destroy(Tempstr);
     return(result);
 }
 
@@ -608,7 +621,7 @@ int ProcessContainer(const char *Config)
     char *Name=NULL, *Value=NULL;
     char *Tempstr=NULL;
     const char *ptr;
-    int i, val, Flags=0;
+    int Flags=0;
     int result=TRUE;
     pid_t child;
 
@@ -670,11 +683,13 @@ int ProcessContainer(const char *Config)
         }
         ProcessContainerFilesys(Config, ChRoot, Flags);
 
-//fork again because CLONE_NEWPID only takes effect after another fork, and creates an 'init' process
-
+        //fork again because CLONE_NEWPID only takes effect after another fork, and creates an 'init' process
         child=fork();
         if (child==0)
         {
+            //we do not call CredsStoreOnFork here becausee it's assumed that we want to take the creds store with us, as
+            //these forks are in order to change aspects of our program, rather than spawn a new process
+
             //must do proc after the fork so that CLONE_NEWPID takes effect
             mkdir("proc",0755);
             FileSystemMount("","proc","proc","");
@@ -722,14 +737,14 @@ int ProcessContainer(const char *Config)
         else _exit(0);
     }
 
-    DestroyString(Tempstr);
-    DestroyString(SetupScript);
-    DestroyString(HostName);
-    DestroyString(Namespace);
-    DestroyString(Name);
-    DestroyString(Value);
-    DestroyString(ChRoot);
-    DestroyString(Dir);
+    Destroy(Tempstr);
+    Destroy(SetupScript);
+    Destroy(HostName);
+    Destroy(Namespace);
+    Destroy(Name);
+    Destroy(Value);
+    Destroy(ChRoot);
+    Destroy(Dir);
 
     return(result);
 }
@@ -740,14 +755,16 @@ int ProcessApplyConfig(const char *Config)
 {
     char *Chroot=NULL;
     char *Name=NULL, *Value=NULL, *Capabilities=NULL;
-    const char *ptr;
+    const char *ptr=NULL;
     struct rlimit limit;
     rlim_t val;
     int Flags=0, i;
     long uid=0, gid=0;
-    int lockfd;
+    int lockfd, ctty_fd=0;
 
-    ptr=GetNameValuePair(Config,"\\S","=",&Name,&Value);
+    ptr=Config;
+    while (isspace(*ptr)) ptr++;
+    ptr=GetNameValuePair(ptr,"\\S","=",&Name,&Value);
     while (ptr)
     {
 
@@ -766,12 +783,18 @@ int ProcessApplyConfig(const char *Config)
         else if (strcasecmp(Name,"daemon")==0) Flags |= PROC_DAEMON;
         else if (strcasecmp(Name,"demon")==0) Flags |= PROC_DAEMON;
         else if (strcasecmp(Name,"ctrltty")==0) Flags |= PROC_CTRL_TTY;
+        else if (strcasecmp(Name,"ctty")==0)
+        {
+            ctty_fd=atoi(Value);
+            Flags |= PROC_CTRL_TTY;
+        }
         else if (strcasecmp(Name,"innull")==0)  fd_remap_path(0, "/dev/null", O_WRONLY);
         else if (strcasecmp(Name,"outnull")==0)
         {
             fd_remap_path(1, "/dev/null", O_WRONLY);
             fd_remap_path(2, "/dev/null", O_WRONLY);
         }
+        else if (strcasecmp(Name,"errnull")==0) fd_remap_path(2, "/dev/null", O_WRONLY);
         else if (strcasecmp(Name,"jail")==0) Flags |= PROC_JAIL;
         else if (strcasecmp(Name,"trust")==0) Flags |= SPAWN_TRUST_COMMAND;
         else if (strcasecmp(Name,"noshell")==0) Flags |= SPAWN_NOSHELL;
@@ -825,7 +848,6 @@ int ProcessApplyConfig(const char *Config)
     }
 
 
-
 //set all signal handlers to default
     if (Flags & PROC_SIGDEF)
     {
@@ -837,13 +859,7 @@ int ProcessApplyConfig(const char *Config)
     {
         if (Flags & PROC_SETSID) setsid();
         if (Flags & PROC_NEWPGROUP) setpgid(0, 0);
-        if (Flags & PROC_CTRL_TTY)
-        {
-//Set controlling tty to be stdin. This means that CTRL-C, SIGWINCH etc is handled for the
-//stdin file descriptor, not for any other
-            ioctl(0,TIOCSCTTY,0);
-            //tcsetpgrp(0, getpgrp());
-        }
+        if (Flags & PROC_CTRL_TTY) ProcessSetControlTTY(ctty_fd);
     }
 
 
@@ -863,6 +879,7 @@ int ProcessApplyConfig(const char *Config)
             Flags |= PROC_SETUP_FAIL;
         }
     }
+
 
 
     if (! (Flags & PROC_SETUP_FAIL))
@@ -927,21 +944,23 @@ int ProcessApplyConfig(const char *Config)
         }
     }
 
-    DestroyString(Value);
-    DestroyString(Name);
-    DestroyString(Chroot);
-    DestroyString(Capabilities);
+    Destroy(Value);
+    Destroy(Name);
+    Destroy(Chroot);
+    Destroy(Capabilities);
 
     return(Flags);
 }
 
 
-/* This function turns our process into a demon */
+// This function turns our process into a demon
+// though this requires forks, we do not call CredsStoreOnFork as we want to take the Credentials Store with us.
 pid_t demonize()
 {
     int result, i=0;
 
     LogFileFlushAll(TRUE);
+
 //Don't fork with context here, as a demonize involves two forks, so
 //it's wasted work here.
     result=fork();

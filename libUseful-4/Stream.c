@@ -5,6 +5,7 @@
 #include "URL.h"
 #include "Expect.h"
 #include "Http.h"
+#include "Gemini.h"
 #include "Ssh.h"
 #include "Pty.h"
 #include "String.h"
@@ -17,13 +18,6 @@
 #include <linux/fs.h>
 #endif
 
-#ifdef HAVE_LIBSSL
-#include <openssl/crypto.h>
-#include <openssl/x509.h>
-#include <openssl/pem.h>
-#include <openssl/ssl.h>
-#include <openssl/err.h>
-#endif
 
 
 
@@ -467,7 +461,7 @@ int STREAMCheckForWaitingChar(STREAM *S,unsigned char check_char)
 
 
 
-int STREAMInternalFinalWriteBytes(STREAM *S, const char *Data, int DataLen)
+static int STREAMInternalFinalWriteBytes(STREAM *S, const char *Data, int DataLen)
 {
     fd_set selectset;
     int result=0, count=0, len;
@@ -501,18 +495,7 @@ int STREAMInternalFinalWriteBytes(STREAM *S, const char *Data, int DataLen)
 
     while (count < DataLen)
     {
-        if (S->State & SS_SSL)
-        {
-
-#ifdef HAVE_LIBSSL
-            //if this is an SSL stream, it should have an associated SSL object. If it doesn't then the stream
-            //either failed to open, or has been closed with STREAMShutdown
-            vptr=STREAMGetItem(S,"LIBUSEFUL-SSL:OBJ");
-            if (vptr) result=SSL_write((SSL *) vptr, Data + count, DataLen - count);
-            else result=STREAM_CLOSED;
-            if (result < 0) result=STREAM_CLOSED;
-#endif
-        }
+        if (S->State & SS_SSL) result=OpenSSLSTREAMWriteBytes(S, Data+count, DataLen-count);
         else
         {
             if (S->Timeout > 0)
@@ -894,9 +877,12 @@ int STREAMParseConfig(const char *Config)
 
     if (StrValid(Config))
     {
+        //first read fopen-style 'open' flags like 'rw'
         ptr=Config;
         while (*ptr != '\0')
         {
+            //any space indicates end of open flags
+            if (isspace(*ptr)) break;
             switch (*ptr)
             {
             case 'c':
@@ -973,7 +959,7 @@ int STREAMParseConfig(const char *Config)
 //will be the LAST one in the list
 static const char *STREAMExtractMasterURL(const char *URL)
 {
-    char *ptr;
+    const char *ptr;
 
     if (strncmp(URL, "cmd:",4) ==0) return(URL); //'cmd:' urls do not go through proxies!
     if (strncmp(URL, "file:",5) ==0) return(URL); //'file:' urls do not go through proxies!
@@ -1005,9 +991,7 @@ STREAM *STREAMOpen(const char *URL, const char *Config)
     ParseURL(ptr, &Proto, &Host, &Token, &User, &Pass, &Path, &Args);
     if (StrValid(Token)) Port=strtoul(Token,NULL,10);
 
-    ptr=GetToken(Config,"\\S",&Token,0);
-    Flags=STREAMParseConfig(Token);
-
+    Flags=STREAMParseConfig(Config);
 
     switch (*Proto)
     {
@@ -1028,6 +1012,11 @@ STREAM *STREAMOpen(const char *URL, const char *Config)
             if (*ptr=='/') ptr++;
             S=STREAMFileOpen(ptr, Flags);
         }
+        else S=STREAMFileOpen(URL, Flags);
+        break;
+
+    case 'g':
+        if (strcasecmp(Proto, "gemini")==0) S=GeminiOpen(URL, Config);
         else S=STREAMFileOpen(URL, Flags);
         break;
 
@@ -1129,7 +1118,8 @@ STREAM *STREAMOpen(const char *URL, const char *Config)
 //nor any associated streams
 void STREAMDestroy(void *p_S)
 {
-    STREAM *S;
+    STREAM *S, *tmpS;
+    ListNode *Curr, *Next;
 
     if (! p_S) return;
 
@@ -1146,6 +1136,29 @@ void STREAMDestroy(void *p_S)
         if (! (S->Flags & SF_MMAP)) Destroy(S->InputBuff);
         Destroy(S->OutputBuff);
     }
+
+    //associate streams are streams that support other streams, like the ssh connection that
+    //supports a port-forward through ssh. We close these down when the owner stream is closed
+    Curr=ListGetNext(S->Items);
+    while (Curr)
+    {
+        Next=ListGetNext(Curr);
+        if (strcmp(Curr->Tag, "LU:AssociatedStream")==0)
+        {
+            tmpS=(STREAM *) Curr->Item;
+            STREAMClose(tmpS);
+            ListDeleteNode(Curr);
+        }
+        else if (strcmp(Curr->Tag, "HTTP:InfoStruct")==0)
+        {
+            HTTPInfoDestroy(Curr->Item);
+            ListDeleteNode(Curr);
+        }
+
+
+        Curr=Next;
+    }
+
 
     ListDestroy(S->Items, NULL);
     ListDestroy(S->Values,(LIST_ITEM_DESTROY_FUNC) Destroy);
@@ -1199,8 +1212,7 @@ void STREAMCloseFile(STREAM *S)
 
 void STREAMShutdown(STREAM *S)
 {
-    ListNode *Curr, *Next;
-    STREAM *tmpS;
+    ListNode *Curr;
     int val;
 
     if (! S) return;
@@ -1240,27 +1252,6 @@ void STREAMShutdown(STREAM *S)
         Curr=ListGetNext(Curr);
     }
 
-    //associate streams are streams that support other streams, like the ssh connection that
-    //supports a port-forward through ssh. We close these down when the owner stream is closed
-    Curr=ListGetNext(S->Items);
-    while (Curr)
-    {
-        Next=ListGetNext(Curr);
-        if (strcmp(Curr->Tag, "LU:AssociatedStream")==0)
-        {
-            tmpS=(STREAM *) Curr->Item;
-            STREAMClose(tmpS);
-            ListDeleteNode(Curr);
-        }
-        else if (strcmp(Curr->Tag, "HTTP:InfoStruct")==0)
-        {
-            HTTPInfoDestroy(Curr->Item);
-            ListDeleteNode(Curr);
-        }
-
-
-        Curr=Next;
-    }
 
     //now we actually close the file descriptors for this stream.
     if ((S->out_fd != S->in_fd) && (S->out_fd > -1)) close(S->out_fd);
@@ -1274,12 +1265,15 @@ void STREAMShutdown(STREAM *S)
         close(S->in_fd);
         S->in_fd=-1;
     }
+
+    S->State=0;
 }
 
 
 void STREAMClose(STREAM *S)
 {
     STREAMShutdown(S);
+
     STREAMDestroy(S);
 }
 
@@ -1287,13 +1281,10 @@ void STREAMClose(STREAM *S)
 int STREAMReadCharsToBuffer(STREAM *S)
 {
     fd_set selectset;
-    int val=0, read_result=0, saved_errno, WaitForBytes=TRUE;
+    int val=0, read_result=0, WaitForBytes=TRUE, saved_errno;
     long bytes_read;
     struct timeval tv;
     char *tmpBuff=NULL, *Peer=NULL;
-#ifdef HAVE_LIBSSL
-    void *SSL_OBJ=NULL;
-#endif
 
     if (! S) return(0);
 
@@ -1336,19 +1327,8 @@ int STREAMReadCharsToBuffer(STREAM *S)
 //if no room in buffer, we can't read in more bytes
     if (S->InEnd >= S->BuffSize) return(1);
 
-
-//This is used in multiple places below, do don't just move it to within the first place
-#ifdef HAVE_LIBSSL
-    SSL_OBJ=STREAMGetItem(S,"LIBUSEFUL-SSL:OBJ");
-
-//if there are bytes available in the internal OpenSSL buffers, when we don't have to
-//wait on a select, we can just go straight through to SSL_read
-    if (S->State & SS_SSL)
-    {
-        //ssl pending checks if there's bytes in the SSL buffer, it's not a select
-        if (SSL_pending((SSL *) SSL_OBJ) > 0) WaitForBytes=FALSE;
-    }
-#endif
+    //if using SSL and already has bytes  queued, don't do a wait on select
+    if ( (S->State & SS_SSL) && OpenSSLSTREAMCheckForBytes(S) ) WaitForBytes=FALSE;
 
     //must set this to 1 in case not doing a select, 'cos S->Timeout not set
     read_result=1;
@@ -1387,30 +1367,21 @@ int STREAMReadCharsToBuffer(STREAM *S)
         val=S->BuffSize - S->InEnd;
         tmpBuff=SetStrLen(tmpBuff,val);
 
-        //saved_erno is used in all cases to capture errno before another function
-        //changes it
-#ifdef HAVE_LIBSSL
-        if (S->State & SS_SSL)
+        if (S->State & SS_SSL) bytes_read=OpenSSLSTREAMReadBytes(S, tmpBuff, val);
+        else if (S->Type==STREAM_TYPE_UDP)
         {
-            bytes_read=SSL_read((SSL *) SSL_OBJ, tmpBuff, val);
+            bytes_read=UDPRecv(S->in_fd,  tmpBuff, val, &Peer, NULL);
             saved_errno=errno;
+            STREAMSetValue(S, "Peer", Peer);
+            Destroy(Peer);
         }
         else
-#endif
-            if (S->Type==STREAM_TYPE_UDP)
-            {
-                bytes_read=UDPRecv(S->in_fd,  tmpBuff, val, &Peer, NULL);
-                saved_errno=errno;
-                STREAMSetValue(S, "Peer", Peer);
-                Destroy(Peer);
-            }
-            else
-            {
-                if (S->Flags & SF_RDLOCK) flock(S->in_fd,LOCK_SH);
-                bytes_read=read(S->in_fd, tmpBuff, val);
-                saved_errno=errno;
-                if (S->Flags & SF_RDLOCK) flock(S->in_fd,LOCK_UN);
-            }
+        {
+            if (S->Flags & SF_RDLOCK) flock(S->in_fd,LOCK_SH);
+            bytes_read=read(S->in_fd, tmpBuff, val);
+            saved_errno=errno;
+            if (S->Flags & SF_RDLOCK) flock(S->in_fd,LOCK_UN);
+        }
 
         if (bytes_read > 0)
         {
@@ -1586,7 +1557,7 @@ uint64_t STREAMSeek(STREAM *S, int64_t offset, int whence)
 
 
 
-int STREAMInternalPushProcessingModules(STREAM *S, const char *InData, unsigned long InLen, char **OutData, unsigned long *OutLen)
+static int STREAMInternalPushProcessingModules(STREAM *S, const char *InData, unsigned long InLen, char **OutData, unsigned long *OutLen)
 {
     TProcessingModule *Mod;
     ListNode *Curr, *Next;
@@ -1628,7 +1599,7 @@ int STREAMInternalPushProcessingModules(STREAM *S, const char *InData, unsigned 
 
 //this function returns the number of bytes *queued*, not number
 //written
-int STREAMInternalQueueBytes(STREAM *S, const char *Bytes, int Len)
+static int STREAMInternalQueueBytes(STREAM *S, const char *Bytes, int Len)
 {
     int o_len, queued=0, avail, val=0, result=0;
     const char *ptr;
@@ -1873,7 +1844,8 @@ int STREAMReadBytesToTerm(STREAM *S, char *Buffer, int BuffSize,unsigned char Te
 char *STREAMReadToTerminator(char *Buffer, STREAM *S, unsigned char Term)
 {
     int result, len=0, avail=0, bytes_read=0;
-    char *RetStr=NULL, *p_Term;
+    char *RetStr=NULL;
+    const unsigned char *p_Term;
     int IsClosed=FALSE;
 
 
@@ -2315,10 +2287,9 @@ unsigned long STREAMSendFile(STREAM *In, STREAM *Out, unsigned long Max, int Fla
             {
                 val=BUFSIZ;
                 if (val > Out->OutEnd) val=Out->OutEnd;
-                result=STREAMInternalFinalWriteBytes(Out, Out->OutputBuff, val);
+                STREAMInternalFinalWriteBytes(Out, Out->OutputBuff, val);
                 sleep(0);
                 val=Out->BuffSize - Out->OutEnd;
-		if (result==STREAM_CLOSED) return(bytes_transferred);
             }
 
 
@@ -2371,7 +2342,7 @@ int STREAMCommit(STREAM *S)
     Item=STREAMGetItem(S, "HTTP:InfoStruct");
     if (Item)
     {
-        if (HTTPTransact((HTTPInfoStruct *) Item)) return(TRUE);
+        if (HTTPTransact((HTTPInfoStruct *) Item) != NULL) return(TRUE);
     }
 
     return(FALSE);

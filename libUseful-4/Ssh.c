@@ -9,7 +9,7 @@ STREAM *SSHConnect(const char *Host, int Port, const char *User, const char *Pas
     char *Tempstr=NULL, *KeyFile=NULL, *Token=NULL, *RemoteCmd=NULL, *TTYConfigs=NULL;
     const char *ptr;
     STREAM *S;
-    int val, i, IsTunnel=FALSE;
+    int IsTunnel=FALSE;
 
 
 //If we are using the .ssh/config connection-config system then there won't be a username, and 'Host' will
@@ -29,8 +29,8 @@ STREAM *SSHConnect(const char *Host, int Port, const char *User, const char *Pas
         Tempstr=MCatStr(Tempstr,"-i ",KeyFile," ",NULL);
     }
 
-    if (Flags & SSH_NO_ESCAPE) Tempstr=MCatStr(Tempstr, "-e none ");
-    if (Flags & SSH_COMPRESS) Tempstr=MCatStr(Tempstr, "-C ");
+    if (Flags & SSH_NO_ESCAPE) Tempstr=MCatStr(Tempstr, "-e none ", NULL);
+    if (Flags & SSH_COMPRESS) Tempstr=MCatStr(Tempstr, "-C ", NULL);
 
     ptr=GetToken(Command, "\\S", &Token, 0);
     while (ptr)
@@ -61,7 +61,7 @@ STREAM *SSHConnect(const char *Host, int Port, const char *User, const char *Pas
     //periodically something causes me to remove the 'pty' settings
     //but then password auth is broken.
     //this comment is so I'm aware of that the next time I think of removing 'pty'
-    TTYConfigs=CopyStr(TTYConfigs, "pty crlf stderr2null ignsig");
+    TTYConfigs=CopyStr(TTYConfigs, "pty crlf stderr2null nosig");
 
     //if we are writing to a file on the remote server then we need some way
     //to tell it 'end of file'. We can't just close the connection, as we
@@ -71,7 +71,6 @@ STREAM *SSHConnect(const char *Host, int Port, const char *User, const char *Pas
 
     TTYConfigs=CatStr(TTYConfigs, " noshell");
 
-    printf("CMD: %s\n", Tempstr);
     S=STREAMSpawnCommand(Tempstr, TTYConfigs);
     if (S)
     {
@@ -127,7 +126,7 @@ STREAM *SSHOpen(const char *Host, int Port, const char *User, const char *Pass, 
     if (iPath)
     {
         ptr=iPath;
-        if (strncmp(ptr, "//", 2)==0) ptr+=2;
+        if (*ptr=='/') ptr++;
         else if (strncmp(ptr, "/./", 3)==0) ptr+=3;
         else if (strncmp(ptr, "/~/", 3)==0) ptr+=3;
     }

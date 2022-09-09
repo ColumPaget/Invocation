@@ -132,10 +132,9 @@ int FileChangeExtension(const char *FilePath, const char *NewExt)
 int FileMoveToDir(const char *FilePath, const char *Dir)
 {
     char *Tempstr=NULL;
-    char *ptr;
     int result;
 
-    Tempstr=MCopyStr(Tempstr, Dir, "/", GetBasename(FilePath));
+    Tempstr=MCopyStr(Tempstr, Dir, "/", GetBasename(FilePath), NULL);
     MakeDirPath(Tempstr, 0700);
     result=rename(FilePath,Tempstr);
     if (result !=0) RaiseError(ERRFLAG_ERRNO, "FileMoveToDir", "cannot rename '%s' to '%s'",FilePath, Tempstr);
@@ -255,6 +254,17 @@ int FileChGroup(const char *FileName, const char *Group)
     RaiseError(ERRFLAG_ERRNO, "FileChGroup", "failed to change group to group=%s gid=%d",Group,gid);
     return(FALSE);
 }
+
+
+int FileChMod(const char *Path, const char *Mode)
+{
+    int perms;
+
+    perms=FileSystemParsePermissions(Mode);
+    if (chmod(Path, perms) ==0) return(TRUE);
+    return(FALSE);
+}
+
 
 
 int FileTouch(const char *Path)
@@ -558,7 +568,7 @@ int FileSystemCopyDir(const char *Src, const char *Dest)
     const char *ptr;
     struct stat Stat;
     char *Tempstr=NULL, *Path=NULL;
-    int i;
+    int i, RetVal=FALSE;
 
     Tempstr=MCopyStr(Tempstr, Dest, "/", NULL);
     MakeDirPath(Tempstr, 0777);
@@ -573,26 +583,28 @@ int FileSystemCopyDir(const char *Src, const char *Dest)
         if ((strcmp(ptr,".") !=0) && (strcmp(ptr, "..") !=0) )
         {
             ptr=Glob.gl_pathv[i];
-            lstat(ptr, &Stat);
-
-            Path=MCopyStr(Path, Dest, "/", GetBasename(ptr), NULL);
-            if (S_ISLNK(Stat.st_mode))
+            if (lstat(ptr, &Stat) == 0)
             {
-                Tempstr=SetStrLen(Tempstr, PATH_MAX);
-                readlink(ptr, Tempstr, PATH_MAX);
-                symlink(Path, Tempstr);
-            }
-            else if (S_ISDIR(Stat.st_mode))
-            {
-                FileSystemCopyDir(ptr, Path);
-            }
-            else if (S_ISREG(Stat.st_mode))
-            {
-                FileCopy(ptr, Path);
-            }
-            else
-            {
-                RaiseError(0, "FileSystemCopyDir", "WARNING: not copying %s. Files of this type aren't yet supported for copy", Src);
+                RetVal=TRUE;
+                Path=MCopyStr(Path, Dest, "/", GetBasename(ptr), NULL);
+                if (S_ISLNK(Stat.st_mode))
+                {
+                    Tempstr=SetStrLen(Tempstr, PATH_MAX);
+                    readlink(ptr, Tempstr, PATH_MAX);
+                    symlink(Path, Tempstr);
+                }
+                else if (S_ISDIR(Stat.st_mode))
+                {
+                    FileSystemCopyDir(ptr, Path);
+                }
+                else if (S_ISREG(Stat.st_mode))
+                {
+                    FileCopy(ptr, Path);
+                }
+                else
+                {
+                    RaiseError(0, "FileSystemCopyDir", "WARNING: not copying %s. Files of this type aren't yet supported for copy", Src);
+                }
             }
         }
     }
@@ -601,4 +613,72 @@ int FileSystemCopyDir(const char *Src, const char *Dest)
 
     Destroy(Tempstr);
     Destroy(Path);
+
+    return(RetVal);
 }
+
+
+static int FileSystemParsePermissionsTri(const char **ptr, int ReadPerm, int WritePerm, int ExecPerm)
+{
+    int Perms=0;
+
+    if (**ptr=='+') ptr++;
+    if (**ptr=='=') ptr++;
+    if (**ptr=='r') Perms |= ReadPerm;
+    if (ptr_incr(ptr, 1) ==0) return(Perms);
+    if (**ptr=='w') Perms |= WritePerm;
+    if (ptr_incr(ptr, 1) ==0) return(Perms);
+    if (**ptr=='x') Perms |= ExecPerm;
+    if (ptr_incr(ptr, 1) ==0) return(Perms);
+
+    return(Perms);
+}
+
+
+int FileSystemParsePermissions(const char *PermsStr)
+{
+    int Perms=0;
+    const char *ptr;
+
+    if (! StrValid(PermsStr)) return(0);
+    ptr=PermsStr;
+
+    switch(*ptr)
+    {
+    case '0':
+    case '1':
+    case '2':
+    case '3':
+    case '4':
+    case '5':
+    case '6':
+    case '7':
+        return(strtol(PermsStr,NULL,8));
+        break;
+
+    case 'a':
+        Perms |= FileSystemParsePermissionsTri(&ptr, S_IRUSR|S_IRGRP|S_IROTH, S_IWUSR|S_IWGRP|S_IWOTH, S_IXUSR|S_IXGRP|S_IXOTH);
+        break;
+
+    case 'u':
+        Perms |= FileSystemParsePermissionsTri(&ptr, S_IRUSR, S_IWUSR, S_IXUSR);
+        break;
+
+    case 'g':
+        Perms |= FileSystemParsePermissionsTri(&ptr, S_IRGRP, S_IWGRP, S_IXGRP);
+        break;
+
+    case 'o':
+        Perms |= FileSystemParsePermissionsTri(&ptr, S_IROTH, S_IWOTH, S_IXOTH);
+        break;
+
+    default:
+        Perms |= FileSystemParsePermissionsTri(&ptr, S_IRUSR, S_IWUSR, S_IXUSR);
+        Perms |= FileSystemParsePermissionsTri(&ptr, S_IRGRP, S_IWGRP, S_IXGRP);
+        Perms |= FileSystemParsePermissionsTri(&ptr, S_IROTH, S_IWOTH, S_IXOTH);
+        break;
+    }
+
+    return(Perms);
+}
+

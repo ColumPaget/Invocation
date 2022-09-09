@@ -2,6 +2,7 @@
 #include "Process.h"
 #include "Log.h"
 #include "Pty.h"
+#include "SecureMem.h"
 #include "Stream.h"
 #include "String.h"
 #include "Errors.h"
@@ -9,6 +10,8 @@
 #include <sys/ioctl.h>
 
 #define SPAWN_COMBINE_STDERR 1
+#define SPAWN_STDOUT_NULL 2
+#define SPAWN_STDERR_NULL 4
 
 int SpawnParseConfig(const char *Config)
 {
@@ -20,17 +23,8 @@ int SpawnParseConfig(const char *Config)
     while (ptr)
     {
         if (strcasecmp(Token,"+stderr")==0) Flags |= SPAWN_COMBINE_STDERR;
-        else if (strcasecmp(Token,"stderr2null")==0)
-        {
-            close(2);
-            open("/dev/null", O_WRONLY);
-        }
-        else if (strcasecmp(Token,"stdout2null")==0)
-        {
-            close(1);
-            open("/dev/null", O_WRONLY);
-        }
-
+        else if (strcasecmp(Token,"stderr2null")==0) Flags |= SPAWN_STDERR_NULL;
+        else if (strcasecmp(Token,"stdout2null")==0) Flags |= SPAWN_STDOUT_NULL;
 
         ptr=GetToken(ptr," |,",&Token,GETTOKEN_MULTI_SEP);
     }
@@ -50,15 +44,17 @@ int BASIC_FUNC_EXEC_COMMAND(void *Command, int Flags)
     char *Token=NULL, *FinalCommand=NULL, *ExecPath=NULL;
     char **argv;
     const char *ptr;
+    int max_arg=100;
     int i;
 
     if (Flags & SPAWN_TRUST_COMMAND) FinalCommand=CopyStr(FinalCommand, (char *) Command);
     else FinalCommand=MakeShellSafeString(FinalCommand, (char *) Command, 0);
 
     StripTrailingWhitespace(FinalCommand);
+
     if (Flags & SPAWN_NOSHELL)
     {
-        argv=(char **) calloc(101,sizeof(char *));
+        argv=(char **) calloc(max_arg+10,sizeof(char *));
         ptr=FinalCommand;
         ptr=GetToken(FinalCommand,"\\S",&Token,GETTOKEN_QUOTES);
         ExecPath=FindFileInPath(ExecPath,Token,getenv("PATH"));
@@ -70,7 +66,7 @@ int BASIC_FUNC_EXEC_COMMAND(void *Command, int Flags)
             i=1;
         }
 
-        for (; i < 100; i++)
+        for (; i < max_arg; i++)
         {
             ptr=GetToken(ptr,"\\S",&Token,GETTOKEN_QUOTES);
             if (! ptr) break;
@@ -101,7 +97,10 @@ pid_t xfork(const char *Config)
     if (pid==-1) RaiseError(ERRFLAG_ERRNO, "fork", "");
     if (pid==0)
     {
-        ProcessApplyConfig(Config);
+        //we must handle creds store straight away, because it's memory is likely configured
+        //with SMEM_NOFORK and thus the memory is invalid on fork
+        CredsStoreOnFork();
+        if (StrValid(Config)) ProcessApplyConfig(Config);
     }
     return(pid);
 }
@@ -141,7 +140,7 @@ pid_t xforkio(int StdIn, int StdOut, int StdErr)
 
 
 
-void InternalSwitchProgram(const char *CommandLine, const char *Config)
+static void InternalSwitchProgram(const char *CommandLine, const char *Config)
 {
     int Flags;
 
@@ -183,7 +182,7 @@ pid_t PipeSpawnFunction(int *infd, int *outfd, int *errfd, BASIC_FUNC Func, void
     //default these to stdin, stdout and stderr and then override those later
     int c1=0, c2=1, c3=2;
     int channel1[2], channel2[2], channel3[2], DevNull=-1;
-    int Flags;
+    int Flags=0;
 
 
     Flags=SpawnParseConfig(Config);
@@ -216,6 +215,12 @@ pid_t PipeSpawnFunction(int *infd, int *outfd, int *errfd, BASIC_FUNC Func, void
         /* we are the child */
         if (infd) close(channel1[1]);
         else if (DevNull==-1) DevNull=open("/dev/null",O_RDWR);
+
+        if (Flags & SPAWN_STDOUT_NULL)
+        {
+            close(*outfd);
+            outfd=NULL;
+        }
 
         if (outfd) close(channel2[0]);
         else if (DevNull==-1) DevNull=open("/dev/null",O_RDWR);
@@ -269,7 +274,7 @@ pid_t PipeSpawn(int *infd,int  *outfd,int  *errfd, const char *Command, const ch
 
 pid_t PseudoTTYSpawnFunction(int *ret_pty, BASIC_FUNC Func, void *Data, int Flags, const char *Config)
 {
-    pid_t pid=-1, ConfigFlags;
+    pid_t pid=-1, ConfigFlags=0;
     int tty, pty, i;
 
     if (PseudoTTYGrab(&pty, &tty, Flags))
@@ -279,10 +284,7 @@ pid_t PseudoTTYSpawnFunction(int *ret_pty, BASIC_FUNC Func, void *Data, int Flag
         {
             close(pty);
 
-            //doesn't seem to exist under macosx!
-#ifdef TIOCSCTTY
-            ioctl(tty,TIOCSCTTY,0);
-#endif
+            ProcessSetControlTTY(tty);
             setsid();
 
             ///now that we've dupped it, we don't need to keep it open
@@ -339,14 +341,14 @@ STREAM *STREAMSpawnFunction(BASIC_FUNC Func, void *Data, const char *Config)
 
     if (pid > 0)
     {
-				S=STREAMFromDualFD(from_fd, to_fd);
-				/*
-        if (waitpid(pid, NULL, WNOHANG) < 1) 
+        S=STREAMFromDualFD(from_fd, to_fd);
+        /*
+        if (waitpid(pid, NULL, WNOHANG) < 1)
         //sleep to allow spawned function time to exit due to startup problems
         usleep(250);
         //use waitpid to check process has not exited, if so then spawn stream
-				else fprintf(stderr, "ERROR: Subprocess exited: %s %s\n", strerror(errno), Data);
-				*/
+        else fprintf(stderr, "ERROR: Subprocess exited: %s %s\n", strerror(errno), Data);
+        */
     }
 
     if (S)
@@ -364,16 +366,29 @@ STREAM *STREAMSpawnFunction(BASIC_FUNC Func, void *Data, const char *Config)
 
 STREAM *STREAMSpawnCommand(const char *Command, const char *Config)
 {
-char *Token=NULL, *ExecPath=NULL;
-STREAM *S=NULL;
+    char *Token=NULL, *ExecPath=NULL;
+    const char *ptr;
+    STREAM *S=NULL;
+    int UseShell=TRUE;
 
-		GetToken(Command, "\\S", &Token, GETTOKEN_QUOTES);
+    //if 'noshell' exists in Config, then we want to do more checking (i.e. exe to be launched must exist on disk)
+    //otherwise this could be a shell command that doesn't exist on disk
+    ptr=GetToken(Config, "\\S", &Token, GETTOKEN_QUOTES);
+    while (ptr)
+    {
+        if (strcmp(Token, "noshell")==0) UseShell=FALSE;
+        ptr=GetToken(ptr, "\\S", &Token, GETTOKEN_QUOTES);
+    }
+
+    GetToken(Command, "\\S", &Token, GETTOKEN_QUOTES);
     ExecPath=FindFileInPath(ExecPath,Token,getenv("PATH"));
 
-		if (StrValid(ExecPath)) S=STREAMSpawnFunction(BASIC_FUNC_EXEC_COMMAND, (void *) Command, Config);
+    //take a copy of this as it's going to be passed to another process and
+    Token=CopyStr(Token, Command);
+    if (UseShell || StrValid(ExecPath)) S=STREAMSpawnFunction(BASIC_FUNC_EXEC_COMMAND, (void *) Token, Config);
 
-		Destroy(ExecPath);
-		Destroy(Token);
+    Destroy(ExecPath);
+    Destroy(Token);
 
-		return(S);
+    return(S);
 }

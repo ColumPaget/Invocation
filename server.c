@@ -117,8 +117,6 @@ int FindPermission(STREAM *S, TPeerInfo *Peer, const char *Command, const char *
 {
     ListNode *Curr;
 
-    syslog(LOG_DEBUG, "Find permission for peer %s@%s", Peer->UserName, Peer->ExePath);
-
     Curr=ListGetNext(Config);
     while (Curr)
     {
@@ -183,7 +181,7 @@ int ProcessExpect(STREAM *S, const char *ExpectName, ListNode *Vars, ListNode *C
     Curr=ParserOpenItem(Config, ExpectName);
     while (Curr)
     {
-        if (Curr->ItemType==ITEM_VALUE)
+        if (ParserItemIsValue(Curr))
         {
             ptr=GetToken(Curr->Item, "\\S", &Token, GETTOKEN_QUOTES);
             Expect=SubstituteVarsInString(Expect, Token, Vars, 0);
@@ -248,6 +246,7 @@ static void RunCommand(STREAM *PeerS, const char *Details, ListNode *Vars, ListN
 
     ptr=GetToken(Details, "\\S", &Tempstr, GETTOKEN_QUOTES);
     Cmd=SubstituteVarsInString(Cmd, Tempstr, Vars, SUBS_SHELL_SAFE);
+    syslog(LOG_NOTICE, "subs %s: %s", GetVar(Vars, "args"), Cmd);
 
 //some absolute last checks on the command we are going to run
     maxlen=atoi(GetVar(Vars, "InvokeMaxArgLen"));
@@ -283,7 +282,10 @@ static void RunCommand(STREAM *PeerS, const char *Details, ListNode *Vars, ListN
         ptr=GetToken(ptr,"\\S",&Tempstr, GETTOKEN_HONOR_QUOTES);
     }
 
-    if (isatty(2)) fprintf(stderr, "RUN: %s caps=[%s] expect=[%s] Timeout=%d\n", Cmd, Capabilities, Expect, Timeout);
+    Tempstr=SubstituteVarsInString(Tempstr, "$(invoke:user)@$(invoke:peer_program)", Vars, 0);
+    syslog(LOG_NOTICE, "run for %s: %s", Tempstr, Cmd);
+    if (isatty(2)) fprintf(stderr, "run for %s: %s\n", Tempstr, Cmd);
+
     CmdS=STREAMSpawnCommand(Cmd, Capabilities);
     if (CmdS)
     {
@@ -369,27 +371,39 @@ int RunInvokeCommand(STREAM *S, const char *Command, ListNode *Vars, ListNode *C
     Curr=ListGetNext(Config);
     while (Curr)
     {
-        if (Curr->ItemType==ITEM_VALUE)
+        if (ParserItemIsValue(Curr))
         {
             if (strcmp(Curr->Tag, "require")==0)
             {
                 if (! CheckRequirement(Curr->Item, S, Peer, Vars))
                 {
+                    syslog(LOG_DEBUG, "requirement failed for: %s@%s require=%s", Peer->UserName, Peer->ExePath, (const char *) Curr->Item);
                     Destroy(Tempstr);
                     return(FALSE);
                 }
             }
             else if (strcmp(Curr->Tag, "chuser")==0) SwitchUser((const char *) Curr->Item);
             else if (strcmp(Curr->Tag, "chgrp")==0) SwitchGroup((const char *) Curr->Item);
-            else if (strcmp(Curr->Tag, "bookout")==0) BookoutFileToClient(S, (const char *) Curr->Item, Vars);
-            else if (strcmp(Curr->Tag, "bookin")==0) BookinFileFromClient(S, (const char *) Curr->Item, Vars);
+            else if (strcmp(Curr->Tag, "bookout")==0)
+            {
+                syslog(LOG_NOTICE, "bookout for: %s@%s item=%s", Peer->UserName, Peer->ExePath, (const char *) Curr->Item);
+                BookoutFileToClient(S, (const char *) Curr->Item, Vars);
+            }
+            else if (strcmp(Curr->Tag, "bookin")==0)
+            {
+                syslog(LOG_NOTICE, "bookin for: %s@%s item=%s", Peer->UserName, Peer->ExePath, (const char *) Curr->Item);
+                BookinFileFromClient(S, (const char *) Curr->Item, Vars);
+            }
             else if (strcmp(Curr->Tag, "clientrun")==0)
             {
                 Tempstr=MCopyStr(Tempstr, "clientrun ",(const char *) Curr->Item,"\n",NULL);
                 STREAMWriteLine(Tempstr, S);
 //		BookoutFileToClient(S, (const char *) Curr->Item, Vars);
             }
-            else if (strcmp(Curr->Tag, "run")==0) RunCommand(S, (const char *) Curr->Item, Vars, Config);
+            else if (strcmp(Curr->Tag, "run")==0)
+            {
+                RunCommand(S, (const char *) Curr->Item, Vars, Config);
+            }
         }
         waitpid(-1, NULL, WNOHANG);
         Curr=ListGetNext(Curr);
@@ -446,6 +460,10 @@ static int HandleInvoke(STREAM *S, TPeerInfo *Peer, const char *Details)
     SetVar(Vars, "invoke:uid", Value);
     Value=FormatStr(Value,"%d", Peer->gid);
     SetVar(Vars, "invoke:gid", Value);
+    Value=FormatStr(Value,"%d", Peer->pid);
+    SetVar(Vars, "invoke:peer_pid", Value);
+    SetVar(Vars, "invoke:peer_program", Peer->ExePath);
+
 
     if (FindPermission(S, Peer, Command, "")) RunInvoke(S, Command, Vars, Peer);
     else STREAMWriteLine("FAIL: Not authorized\n", S);

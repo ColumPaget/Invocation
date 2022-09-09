@@ -13,6 +13,7 @@ typedef struct
 } TStrLenCacheEntry;
 
 static int StrLenCacheSize=0;
+static int StrLenCacheMinLen=100;
 static TStrLenCacheEntry *StrLenCache=NULL;
 
 
@@ -71,6 +72,11 @@ char *strrep(char *str, char oldchar, char newchar)
     {
         if (*ptr==oldchar) *ptr=newchar;
     }
+
+    //if replacement char is a null, then replacing it will change length of string
+    //so detete it from strlen cache
+    if (newchar=='\0') StrLenCacheDel(str);
+
     return(str);
 }
 
@@ -83,6 +89,11 @@ char *strmrep(char *str, char *oldchars, char newchar)
     {
         if (strchr(oldchars,*ptr)) *ptr=newchar;
     }
+
+    //if replacement char is a null, then replacing it will change length of string
+    //so detete it from strlen cache
+    if (newchar=='\0') StrLenCacheDel(str);
+
     return(str);
 }
 
@@ -132,8 +143,10 @@ void StrLenCacheAdd(const char *Str, size_t len)
     {
         StrLenCache=(TStrLenCacheEntry *) calloc(20, sizeof(TStrLenCacheEntry));
         StrLenCacheSize=20;
+        StrLenCacheMinLen=100;
     }
 
+    //is string already in cache?
     for (i=0; i < StrLenCacheSize; i++)
     {
         if (StrLenCache[i].Str == NULL) emptyslot=i;
@@ -144,30 +157,40 @@ void StrLenCacheAdd(const char *Str, size_t len)
         }
     }
 
-    if (emptyslot == -1) emptyslot=rand() % StrLenCacheSize;
+//strlen caching has been seen to give a benefit with very large strings, but modern processors with built-in strlen
+//functions are proabably faster.
+//don't pollute cache with short strings that don't take long to look up
+    if (len > StrLenCacheMinLen)
+    {
+        //if we get here than string isn't in cache and we add it
+        if (emptyslot == -1) emptyslot=rand() % StrLenCacheSize;
 
-    StrLenCache[emptyslot].Str=Str;
-    StrLenCache[emptyslot].len=len;
+        StrLenCache[emptyslot].Str=Str;
+        StrLenCache[emptyslot].len=len;
+    }
 }
 
 
 int StrLenFromCache(const char *Str)
 {
-    uint64_t c, i;
+    int i, len;
+    const char *ptr;
 
-    if (! Str) return(0);
+    if (! StrValid(Str)) return(0);
 
-//apparently with a good compiler this gives a faster result than checking each byte
-//not sure I believe it but it doesn't cost much so...
-    c=*(uint64_t *) Str;
-    if ((c & 0xFF)==0) return(0);
-    if ((c & 0xFF00)==0) return(1);
-    if ((c & 0xFF0000)==0) return(2);
-    if ((c & 0xFF000000)==0) return(3);
-    if ((c & 0xFF00000000)==0) return(4);
-    if ((c & 0xFF0000000000)==0) return(5);
-    if ((c & 0xFF000000000000)==0) return(6);
-    if ((c & 0xFF00000000000000)==0) return(7);
+    /* this kind of thing alarms some lint/memcheck software, and is risky if the memory allocated to string is less than 64 bits
+       might go back to it if I ever include a custom allocator for libUseful strings though
+
+        ptr=Str;
+        if ((c & 0xFF)==0) return(0);
+        if ((c & 0xFF00)==0) return(1);
+        if ((c & 0xFF0000)==0) return(2);
+        if ((c & 0xFF000000)==0) return(3);
+        if ((c & 0xFF00000000)==0) return(4);
+        if ((c & 0xFF0000000000)==0) return(5);
+        if ((c & 0xFF000000000000)==0) return(6);
+        if ((c & 0xFF00000000000000)==0) return(7);
+    */
 
 //okay, it's not a short string, so is it in the cache?
     for (i=0; i < StrLenCacheSize; i++)
@@ -177,11 +200,9 @@ int StrLenFromCache(const char *Str)
 
         if (StrLenCache[i].Str == Str)
         {
-//	fprintf(stderr, "strlen cache hit: %d\n", StrLenCache[i].len);
             return(StrLenCache[i].len);
         }
     }
-//fprintf(stderr, "strlen cache miss: %d\n", StrLenCache[i].len);
 
 //okay, nothing worked, fall back to good old strlen
     return(strlen(Str));
@@ -191,8 +212,11 @@ int StrLenFromCache(const char *Str)
 //Use strlen cache
 void Destroy(void *Obj)
 {
-    StrLenCacheDel(Obj);
-    if (Obj) free(Obj);
+    if (Obj)
+    {
+        StrLenCacheDel(Obj);
+        free(Obj);
+    }
 }
 
 
@@ -208,7 +232,7 @@ char *SetStrLen(char *Str, size_t len)
     if (Str==NULL) ptr=(char *) calloc(1, len + 8);
     else ptr=(char *) realloc(Str, len + 8);
 
-    if (len > 8) StrLenCacheAdd(ptr, len);
+    if (len > StrLenCacheMinLen) StrLenCacheAdd(ptr, len);
     return(ptr);
 }
 
@@ -648,8 +672,9 @@ char *StripCRLF(char *Str)
 char *StripQuotes(char *Str)
 {
     int len;
-    char *ptr, StartQuote='\0';
+    char *ptr, *end, StartQuote='\0';
 
+    if (! Str) return(Str);
     ptr=Str;
     while (isspace(*ptr)) ptr++;
 
@@ -657,10 +682,14 @@ char *StripQuotes(char *Str)
     {
         StartQuote=*ptr;
         len=StrLenFromCache(ptr);
-        if ((len > 0) && (StartQuote != '\0') && (ptr[len-1]==StartQuote))
+
+        end=ptr+len-1;
+
+        if ((len > 0) && (StartQuote != '\0') && (*end==StartQuote))
         {
-            if (ptr[len-1]==StartQuote) ptr[len-1]='\0';
-            memmove(Str,ptr+1,len);
+            *end='\0';
+            len--;
+            memmove(Str, ptr+1,len);
             StrLenCacheAdd(Str, len);
         }
     }

@@ -41,6 +41,14 @@ then
 AC_DEFINE([HAVE_SETRESUID])
 fi
 
+AC_CHECK_LIB(c,initgroups,,)
+cf_have_initgroups=$ac_cv_lib_c_initgroups
+if test "$cf_have_initgroups" = "yes"
+then
+AC_DEFINE([HAVE_INITGROUPS])
+fi
+
+
 AC_CHECK_LIB(c,get_current_dir_name,,)
 cf_have_get_current_dir_name=$ac_cv_lib_c_get_current_dir_name
 if test "$cf_have_get_current_dir_name" = "yes"
@@ -197,7 +205,7 @@ then
 fi
 
 
-AC_CHECK_FUNCS(OpenSSL_add_all_algorithms EVP_bf_cbc EVP_rc2_cbc EVP_rc4 EVP_rc5_32_12_16_cbc EVP_des_cbc EVP_desx_cbc EVP_cast5_cbc EVP_idea_cbc EVP_aes_128_cbc EVP_aes_256_cbc X509_check_host SSL_set_tlsext_host_name)
+AC_CHECK_FUNCS(OpenSSL_add_all_algorithms EVP_bf_cbc EVP_rc2_cbc EVP_rc4 EVP_rc5_32_12_16_cbc EVP_des_cbc EVP_desx_cbc EVP_cast5_cbc EVP_idea_cbc EVP_aes_128_cbc EVP_aes_256_cbc X509_check_host SSL_set_tlsext_host_name SSL_set_min_proto_version)
 
 
 AC_CHECK_DECLS(OpenSSL_add_all_algorithms,AC_DEFINE([HAVE_OPENSSL_ADD_ALL_ALGORITHMS]),[],[[#include <openssl/ssl.h>]])
