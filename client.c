@@ -84,8 +84,9 @@ void ParseCommandLineArgs(int argc, char *argv[], char **Cmd, char **Vars)
             printf("invocation version: %s\n", VERSION);
             exit(1);
         }
-        else if ((*ptr=='-') || (! strchr(ptr, '='))) Args=MCatStr(Args, ptr, " ",NULL);
-        else *Vars=MCatStr(*Vars, ptr, " ",NULL);
+        else if ((*ptr=='-') || (! strchr(ptr, '='))) Args=MCatStr(Args, ptr, " ", NULL);
+        else *Vars=MCatStr(*Vars, "'", ptr, "' ", NULL);
+
         ptr=CommandLineNext(CL);
     }
 

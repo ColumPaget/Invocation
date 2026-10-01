@@ -1,17 +1,24 @@
-FLAGS=-g -DPACKAGE_NAME=\"\" -DPACKAGE_TARNAME=\"\" -DPACKAGE_VERSION=\"\" -DPACKAGE_STRING=\"\" -DPACKAGE_BUGREPORT=\"\" -DPACKAGE_URL=\"\" -DSTDC_HEADERS=1 -D_FILE_OFFSET_BITS=64 -DHAVE_SYS_TYPES_H=1 -DHAVE_SYS_STAT_H=1 -DHAVE_STDLIB_H=1 -DHAVE_STRING_H=1 -DHAVE_MEMORY_H=1 -DHAVE_STRINGS_H=1 -DHAVE_INTTYPES_H=1 -DHAVE_STDINT_H=1 -DHAVE_UNISTD_H=1 -DUSE_LINUX_CAPABILITIES=1 -DHAVE_LIBPAM=1
-all: invoked invoke grant test
+CC=gcc
+FLAGS=-g -DPACKAGE_NAME=\"\" -DPACKAGE_TARNAME=\"\" -DPACKAGE_VERSION=\"\" -DPACKAGE_STRING=\"\" -DPACKAGE_BUGREPORT=\"\" -DPACKAGE_URL=\"\" -DSTDC_HEADERS=1 -D_FILE_OFFSET_BITS=64 -DHAVE_SYS_TYPES_H=1 -DHAVE_SYS_STAT_H=1 -DHAVE_STDLIB_H=1 -DHAVE_STRING_H=1 -DHAVE_MEMORY_H=1 -DHAVE_STRINGS_H=1 -DHAVE_INTTYPES_H=1 -DHAVE_STDINT_H=1 -DHAVE_UNISTD_H=1 -DHAVE_SHADOW_H=1 -DHAVE_LIBCRYPT=1 -DHAVE_LIBUSEFUL=Y -DHAVE_LIBUSEFUL_5=1 -DHAVE_LIBSSL=1 -DHAVE_LIBCRYPTO=1 -DHAVE_LIBCAP=1 -DUSE_LINUX_CAPABILITIES=1 -DHAVE_LIBPAM=1 -DUSE_PAM=1
+prefix=/usr
+exec_prefix=${prefix}
+bindir=${exec_prefix}/bin
+mandir=${prefix}/share/man
 SERVER_OBJ=common.o peer.o appdb.o auth.o book_inout.o
 CLIENT_OBJ=common.o peer.o
 GRANT_OBJ=common.o appdb.o peer.o 
-LIBS=-lpam  -lpam libUseful-4/libUseful.a 
+LIBS=-lpam -lcap -lcrypto -lssl -lUseful-5 -lcrypt   
+INSTALLABLES=invoked invoke grant pam_invocation.so
 
-invoked: $(SERVER_OBJ) server.c libUseful-4/libUseful.a
+all: $(INSTALLABLES)
+
+invoked: $(SERVER_OBJ) server.c 
 	$(CC) $(FLAGS) -oinvoked $(SERVER_OBJ) server.c $(LIBS)
 
-invoke: $(CLIENT_OBJ) client.c libUseful-4/libUseful.a 
+invoke: $(CLIENT_OBJ) client.c  
 	$(CC) $(FLAGS) -oinvoke $(CLIENT_OBJ)  client.c $(LIBS)
 
-grant: $(GRANT_OBJ) grant.c libUseful-4/libUseful.a 
+grant: $(GRANT_OBJ) grant.c  
 	$(CC) $(FLAGS) -ogrant $(GRANT_OBJ) grant.c $(LIBS)
 
 common.o: common.h common.c
@@ -29,11 +36,21 @@ auth.o: auth.h auth.c
 book_inout.o: book_inout.h book_inout.c
 	$(CC) $(FLAGS) -c book_inout.c
 
-libUseful-4/libUseful.a:
-	$(MAKE) -C libUseful-4
+pam_invocation.so: pam_invocation.c
+	$(CC) $(FLAGS) -opam_invocation.so -shared -lpam pam_invocation.c
+
+libUseful-bundled/libUseful.a:
+	$(MAKE) -C libUseful-bundled
 
 clean:
-	rm -f *.o */*.o */*.so */*.a invoked invoke grant
+	rm -f *.o */*.o */*.so */*.a *.orig invoked invoke grant *.so
 
 test:
 	echo "no tests"
+
+
+install: $(INSTALLABLES)
+	cp invoked $(prefix)/sbin
+	cp invoke $(bindir)
+	cp pam_invocation.so /lib/security
+

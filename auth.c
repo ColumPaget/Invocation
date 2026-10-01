@@ -11,8 +11,8 @@
 static pam_handle_t *pamh=NULL;
 
 
-int PAMConvFunc(int NoOfMessages, const struct pam_message **messages,
-                struct pam_response **responses, void *appdata)
+static int PAMConvFunc(int NoOfMessages, const struct pam_message **messages,
+                       struct pam_response **responses, void *appdata)
 {
     int count;
     const struct pam_message *mess;
@@ -39,26 +39,13 @@ int PAMConvFunc(int NoOfMessages, const struct pam_message **messages,
 }
 
 
-int PAMStart(const char *PAMTypes, const char *UserName, const char *Password)
+static int PAMStart(const char *PAMType, const char *UserName, const char *Password)
 {
     static struct pam_conv  PAMConvStruct = {PAMConvFunc, NULL };
     int result=PAM_PERM_DENIED;
-    const char *ptr;
-    char *Token=NULL;
 
     PAMConvStruct.appdata_ptr=(void *) Password;
-
-    ptr=GetToken(PAMTypes, ",", &Token, GETTOKEN_QUOTES);
-    while (ptr)
-    {
-        result=pam_start(Token, UserName, &PAMConvStruct, &pamh);
-        if (result==PAM_SUCCESS) break;
-        ptr=GetToken(ptr, ",", &Token, GETTOKEN_QUOTES);
-    }
-
-    Destroy(Token);
-
-    if (result==PAM_SUCCESS)
+    if (pam_start(PAMType, UserName, &PAMConvStruct, &pamh) == PAM_SUCCESS)
     {
         pam_set_item(pamh,PAM_RUSER, UserName);
         pam_set_item(pamh,PAM_RHOST,"");
@@ -67,33 +54,42 @@ int PAMStart(const char *PAMTypes, const char *UserName, const char *Password)
 
     return(FALSE);
 }
+
+static void PAMClose(int PAMResult)
+{
+    if (pamh)
+    {
+        pam_close_session(pamh, 0);
+        pam_end(pamh, PAMResult);
+        pamh=NULL;
+    }
+}
+
+
 #endif
 
 
 
-int AuthPAM(const char *PAMTypes, const char *UserName, const char *Pass)
+static int AuthPAM(const char *PAMType, const char *UserName, const char *Pass)
 {
+    int RetVal=FALSE;
+
 #ifdef HAVE_LIBPAM
     static struct pam_conv  PAMConvStruct = {PAMConvFunc, NULL };
     int result;
 
-    result=PAMStart(PAMTypes, UserName, Pass);
-    if (result != PAM_SUCCESS)
+    result=PAMStart(PAMType, UserName, Pass);
+    if (result == PAM_SUCCESS)
     {
-        pam_end(pamh,result);
-        return(USER_UNKNOWN);
+        result=pam_authenticate(pamh, 0);
+        if (result==PAM_SUCCESS) RetVal=TRUE;
     }
+    else RetVal=USER_UNKNOWN;
 
-    result=pam_authenticate(pamh, 0);
-
-    if (result==PAM_SUCCESS)
-    {
-//  if (Settings.Flags & FLAG_LOG_VERBOSE) LogToFile(Settings.LogPath,"AUTH: UserName '%s' Authenticated via PAM.",UserName);
-        return(TRUE);
-    }
+    PAMClose(result);
 #endif
 
-    return(FALSE);
+    return(RetVal);
 }
 
 
@@ -120,13 +116,82 @@ int AuthPAMCheckAccount(const char *UserName)
 
 
 
-void AuthPAMClose()
+
+
+//Authentications that don't use PAM
+static int AuthPasswdFile(const char *User, const char *Password)
 {
-#ifdef HAVE_LIBPAM
-    if (pamh)
+    struct passwd *pass_struct;
+    const char *ptr;
+
+    pass_struct=getpwnam(User);
+    if (pass_struct==NULL) return(USER_UNKNOWN);
+
+#ifdef HAVE_LIBCRYPT
+
+    if (pass_struct->pw_passwd && Password)
     {
-        pam_close_session(pamh, 0);
-        pam_end(pamh,PAM_SUCCESS);
+        ptr=crypt(Password, pass_struct->pw_passwd);
+        if (ptr && (strcmp(pass_struct->pw_passwd, ptr)==0))
+        {
+            return(TRUE);
+        }
     }
+
 #endif
+
+    return(FALSE);
+}
+
+
+static int AuthShadowFile(const char *User, const char *Password)
+{
+    char *sptr, *eptr, *Salt=NULL, *Digest=NULL;
+    int result=FALSE;
+
+#ifdef HAVE_SHADOW_H
+#include <shadow.h>
+    struct spwd *pass_struct=NULL;
+
+    pass_struct=getspnam(User);
+
+    if (pass_struct==NULL) return(USER_UNKNOWN);
+
+#ifdef HAVE_LIBCRYPT
+    Digest=CopyStr(Digest, crypt(Password, pass_struct->sp_pwdp));
+    if (strcmp(Digest, pass_struct->sp_pwdp)==0) result=TRUE;
+#endif
+
+
+#endif
+    Destroy(Salt);
+    Destroy(Digest);
+
+    return(result);
+}
+
+
+int AuthCheck(const char *AuthTypes, const char *UserName, const char *Password)
+{
+    char *Type=NULL;
+    const char *ptr;
+    int result=FALSE;
+
+    ptr=GetToken(AuthTypes, ",", &Type, GETTOKEN_QUOTES);
+    while (ptr)
+    {
+        if (strcasecmp(Type, "passwd")==0) result=AuthPasswdFile(UserName, Password);
+        else if (strcasecmp(Type, "shadow")==0) result=AuthShadowFile(UserName, Password);
+        else result=AuthPAM(Type, UserName, Password);
+
+        if (result == TRUE) break;
+
+        ptr=GetToken(ptr, ",", &Type, GETTOKEN_QUOTES);
+    }
+
+    Destroy(Type);
+
+//do this check because Auth Functions can return other values than TRUE
+    if (result==TRUE) return(TRUE);
+    return(FALSE);
 }

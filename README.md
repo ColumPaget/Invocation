@@ -225,13 +225,42 @@ BOOK OUT/IN SYSTEM
 
 The book out/in system allows files to be copied to the client, worked on, and then copied back into place. This means that at no point does the client need to elevate their permissions just to edit a file. It is configured in the server config system like so:
 
+
 ```
+edit_hosts
+{
 bookout /etc/hosts
 clientrun /usr/bin/vi ./hosts
 bookin /etc/hosts
-
+}
 ```
 
 the 'bookout' config sends the specified file to the client. The 'clientrun' config then runs a program *at the client end* (in the above example vi is run against the booked out version of /etc/hosts). Finally, the 'bookin' config sends the altered file back to the server which moves it into /etc/hosts. Both the 'bookout' and 'bookin' commands assume that a booked out file is in the current working directory of the client.
+
+
+
+
+AUTHENTICATION SERVICE
+======================
+
+On systems that support Pluggable Authentication Modules (PAM) a pam module can be built called 'pam_invocation.so'. This uses invocation to perform authentication, meaning that programs like screenlockers no longer need to be 'setuid' to authenticate the user against databases like '/etc/shadow' which are typically only readable by the 'root' user.
+
+For example a PAM file for the 'xautolock' screen locker might look like:
+
+
+```
+# xautolock PAM configuration
+auth    sufficient  pam_invocation.so 
+auth    required    pam_unix.so nullok
+account required    pam_unix.so
+```
+
+This would attempt to contact an invocation server and ask it to check a password for the current user. The server config flle will need a line like:
+
+```
+auth_methods shadow,password,native
+```
+
+This line activates the authentication service and tells it to try and authenticate against "/etc/shadow", "/etc/passwd" and the "native" authentication system in the file "/etc/invoke.auth". Note this line. Note, this line is not wrapped in a "name { }" block, as with other commands, as it relates to an inbuilt service rather than a user-defined one.
 
 

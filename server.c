@@ -38,9 +38,10 @@ static int CheckAuth(const char *AuthTypes, STREAM *S, TPeerInfo *Peer)
     if (Peer->Flags & PEER_AUTHENTICATED) return(TRUE);
     STREAMWriteLine("AUTH\n", S);
     STREAMFlush(S);
-    while (HandleClientRequest(S, Peer, AuthTypes));
-
+    while (HandleClientRequest(S, Peer, AuthTypes))
+		{
     if (Peer->Flags & PEER_AUTHENTICATED) return(TRUE);
+		}
     return(FALSE);
 }
 
@@ -62,45 +63,50 @@ int CheckPermission(STREAM *PeerS, TPeerInfo *Peer, const char *Command, const c
     Curr=ListGetNext(Rules);
     while (Curr)
     {
-        syslog(LOG_DEBUG, "rule '%s %s' peer %s@%s", Curr->Tag, (const char *) Curr->Item, Peer->UserName, Peer->ExePath);
-        if (strcasecmp(Curr->Tag, "user")==0)
+        //this check shouldn't really be needed, but it's been seen to be needed sometimes
+        //when somehow a blank rule gets loaded
+        if (StrValid(Curr->Tag))
         {
-            if (IsItemInList(Peer->UserName, (const char *) Curr->Item)) result=TRUE;
-            else
+            syslog(LOG_DEBUG, "rule '%s %s' peer %s@%s", Curr->Tag, (const char *) Curr->Item, Peer->UserName, Peer->ExePath);
+            if (strcasecmp(Curr->Tag, "user")==0)
             {
-                syslog(LOG_DEBUG, "rule fail: '%s %s' peer %s@%s", Curr->Tag, (const char *) Curr->Item, Peer->UserName, Peer->ExePath);
-                return(FALSE);
+                if (IsItemInList(Peer->UserName, (const char *) Curr->Item)) result=TRUE;
+                else
+                {
+                    syslog(LOG_DEBUG, "rule fail: '%s %s' peer %s@%s", Curr->Tag, (const char *) Curr->Item, Peer->UserName, Peer->ExePath);
+                    return(FALSE);
+                }
             }
-        }
 
-        if (strcasecmp(Curr->Tag, "group")==0)
-        {
-            if (IsItemInList(Peer->GroupName, (const char *) Curr->Item)) result=TRUE;
-            else
+            if (strcasecmp(Curr->Tag, "group")==0)
             {
-                syslog(LOG_DEBUG, "rule fail: '%s %s' peer %s@%s", Curr->Tag, (const char *) Curr->Item, Peer->UserName, Peer->ExePath);
-                return(FALSE);
+                if (IsItemInList(Peer->GroupName, (const char *) Curr->Item)) result=TRUE;
+                else
+                {
+                    syslog(LOG_DEBUG, "rule fail: '%s %s' peer %s@%s", Curr->Tag, (const char *) Curr->Item, Peer->UserName, Peer->ExePath);
+                    return(FALSE);
+                }
             }
-        }
 
-        if (strcasecmp(Curr->Tag, "program")==0)
-        {
-            if (IsItemInList(Peer->ExePath, (const char *) Curr->Item)) result=TRUE;
-            else
+            if (strcasecmp(Curr->Tag, "program")==0)
             {
-                syslog(LOG_DEBUG, "rule fail: '%s %s' peer %s@%s", Curr->Tag, (const char *) Curr->Item, Peer->UserName, Peer->ExePath);
-                return(FALSE);
+                if (IsItemInList(Peer->ExePath, (const char *) Curr->Item)) result=TRUE;
+                else
+                {
+                    syslog(LOG_DEBUG, "rule fail: '%s %s' peer %s@%s", Curr->Tag, (const char *) Curr->Item, Peer->UserName, Peer->ExePath);
+                    return(FALSE);
+                }
             }
-        }
 
 
-        if (strcasecmp(Curr->Tag, "auth")==0)
-        {
-            if (CheckAuth(Curr->Item, PeerS, Peer)) result=TRUE;
-            else
+            if (strcasecmp(Curr->Tag, "auth")==0)
             {
-                syslog(LOG_DEBUG, "rule fail: '%s %s' peer %s@%s", Curr->Tag, (const char *) Curr->Item, Peer->UserName, Peer->ExePath);
-                return(FALSE);
+                if (CheckAuth(Curr->Item, PeerS, Peer)) result=TRUE;
+                else
+                {
+                    syslog(LOG_DEBUG, "rule fail: '%s %s' peer %s@%s", Curr->Tag, (const char *) Curr->Item, Peer->UserName, Peer->ExePath);
+                    return(FALSE);
+                }
             }
         }
 
@@ -147,16 +153,12 @@ static int HandleClientAuth(STREAM *S, TPeerInfo *Peer, const char *Details, con
     if (StrValid(AuthTypes)) Value=CopyStr(Value, AuthTypes);
     else Value=CopyStr(Value, "login");
 
-    if (AuthPAM(Value, Peer->UserName, Password))
+    if (AuthCheck(Value, Peer->UserName, Password))
     {
         Peer->Flags |= PEER_AUTHENTICATED;
         STREAMWriteLine("OKAY: Authenticated\n", S);
     }
     else STREAMWriteLine("FAIL: Authentication failed\n", S);
-
-//AuthPAMCheckAccount(const char *UserName);
-    AuthPAMClose();
-
 
     Destroy(Password);
     Destroy(Name);
@@ -178,7 +180,23 @@ int ProcessExpect(STREAM *S, const char *ExpectName, ListNode *Vars, ListNode *C
     int result=FALSE;
 
     Dialog=ListCreate();
-    Curr=ParserOpenItem(Config, ExpectName);
+
+    /* Some versions of libUseful seem to have an issue with 'ParserOpenItem' that causes us
+    to not find the 'Expect' node here. Hence we instead search manually
+    */
+    Curr=ListGetNext(Config);
+    while (Curr)
+    {
+        if (strcmp(Curr->Tag, ExpectName) ==0)
+        {
+            if (Curr->Side) Curr=(ListNode *) Curr->Side;
+            else Curr=(ListNode *) Curr->Item;
+            break;
+        }
+        Curr=ListGetNext(Curr);
+    }
+//Curr=ParserOpenItem(Config, ExpectName);
+
     while (Curr)
     {
         if (ParserItemIsValue(Curr))
@@ -189,10 +207,13 @@ int ProcessExpect(STREAM *S, const char *ExpectName, ListNode *Vars, ListNode *C
             Reply=SubstituteVarsInString(Reply, Token, Vars, 0);
 
             Reply=CatStr(Reply,"\n");
-            if (strcmp(Curr->Tag,"expect")==0) ExpectDialogAdd(Dialog, Expect, Reply, 0);
-            else if (strcmp(Curr->Tag,"optional")==0) ExpectDialogAdd(Dialog, Expect, Reply, DIALOG_OPTIONAL);
-            else if (strcmp(Curr->Tag,"fail")==0) ExpectDialogAdd(Dialog, Expect, Reply, DIALOG_OPTIONAL | DIALOG_FAIL);
-            else if (strcmp(Curr->Tag,"end")==0) ExpectDialogAdd(Dialog, Expect, Reply, DIALOG_END);
+            if (StrValid(Curr->Tag))
+            {
+                if (strcasecmp(Curr->Tag, "expect")==0) ExpectDialogAdd(Dialog, Expect, Reply, 0);
+                else if (strcasecmp(Curr->Tag, "optional")==0) ExpectDialogAdd(Dialog, Expect, Reply, DIALOG_OPTIONAL);
+                else if (strcasecmp(Curr->Tag, "fail")==0) ExpectDialogAdd(Dialog, Expect, Reply, DIALOG_OPTIONAL | DIALOG_FAIL);
+                else if (strcasecmp(Curr->Tag, "end")==0) ExpectDialogAdd(Dialog, Expect, Reply, DIALOG_END);
+            }
         }
 
         Curr=ListGetNext(Curr);
@@ -270,6 +291,7 @@ static void RunCommand(STREAM *PeerS, const char *Details, ListNode *Vars, ListN
         {
             GetNameValuePair(Tempstr, "\\S", "=", &Name, &Value);
             if (strcmp(Name,"expect")==0) Expect=CopyStr(Expect, Value);
+            else if (strcmp(Name,"nosu")==0) Capabilities=CatStr(Capabilities, "nosu ");
             else if (strcmp(Name,"pty")==0) Capabilities=CatStr(Capabilities, "pty ");
             else if (strcmp(Name,"timeout")==0) Timeout=atoi(Value);
             else if (strcmp(Name,"capabilities")==0) Capabilities=MCatStr(Capabilities, Value);
@@ -430,27 +452,24 @@ int RunInvoke(STREAM *S, const char *Command, ListNode *Vars, TPeerInfo *Peer)
 
 
 
-
-static int HandleInvoke(STREAM *S, TPeerInfo *Peer, const char *Details)
+static ListNode *HandleInvokeParseVars(const char *Details, TPeerInfo *Peer, char **Command)
 {
-    char *Command=NULL, *Name=NULL, *Value=NULL;
     ListNode *Vars;
+    char *Name=NULL, *Value=NULL, *Token=NULL;
     const char *ptr;
 
     Vars=ListCreate();
     ptr=Details;
     while (isspace(*ptr)) ptr++;
-    ptr=GetToken(ptr, "\\S", &Command, GETTOKEN_QUOTES);
+    ptr=GetToken(ptr, "\\S", Command, GETTOKEN_QUOTES);
     while (ptr)
     {
-        ptr=GetNameValuePair(ptr, " ", "=", &Name, &Value);
-        while (ptr)
-        {
-            StripTrailingWhitespace(Value);
-            StripQuotes(Value);
-            SetVar(Vars, Name, Value);
-            ptr=GetNameValuePair(ptr, " ", "=", &Name, &Value);
-        }
+        ptr=GetToken(ptr, "\\S", &Token, GETTOKEN_QUOTES);
+        Value=CopyStr(Value, GetToken(Token, "=", &Name, 0));
+
+        StripTrailingWhitespace(Value);
+        StripQuotes(Value);
+        SetVar(Vars, Name, Value);
     }
 
 
@@ -464,15 +483,27 @@ static int HandleInvoke(STREAM *S, TPeerInfo *Peer, const char *Details)
     SetVar(Vars, "invoke:peer_pid", Value);
     SetVar(Vars, "invoke:peer_program", Peer->ExePath);
 
+    Destroy(Name);
+    Destroy(Value);
+    Destroy(Token);
 
+    return(Vars);
+}
+
+
+static int HandleInvoke(STREAM *S, TPeerInfo *Peer, const char *Details)
+{
+    char *Command=NULL;
+    ListNode *Vars;
+
+
+    Vars=HandleInvokeParseVars(Details, Peer, &Command);
     if (FindPermission(S, Peer, Command, "")) RunInvoke(S, Command, Vars, Peer);
     else STREAMWriteLine("FAIL: Not authorized\n", S);
 
     ListDestroy(Vars, Destroy);
 
     Destroy(Command);
-    Destroy(Name);
-    Destroy(Value);
 }
 
 
@@ -499,20 +530,29 @@ static int HandleClientRequest(STREAM *S, TPeerInfo *Peer, const char *AuthTypes
     int RetVal=FALSE;
 
     Tempstr=STREAMReadLine(Tempstr, S);
+		if (! Tempstr) return(FALSE);
+
     StripTrailingWhitespace(Tempstr);
+
     if (StrValid(Tempstr))
     {
+				syslog(LOG_INFO, "invoked: %s@%s requests '%s'", Peer->UserName, Peer->ExePath, Tempstr);
         ptr=GetToken(Tempstr, "\\S|:", &Token, GETTOKEN_MULTI_SEP);
-        if (strcasecmp(Token, "AUTH")==0) HandleClientAuth(S, Peer, ptr, AuthTypes);
+        if (strcasecmp(Token, "STATUS")==0)
+        {
+            Tempstr=MCopyStr(Tempstr, "READY invocation ", VERSION, "\n", NULL);
+            STREAMWriteLine(Tempstr, S);
+            STREAMFlush(S);
+        }
+        else if (strcasecmp(Token, "AUTH")==0) HandleClientAuth(S, Peer, ptr, AuthTypes);
         else if (strcasecmp(Token, "EXEC")==0) HandleExec(S, Peer, ptr);
         else if (strcasecmp(Token, "INVOKE")==0) HandleInvoke(S, Peer, ptr);
-        RetVal=TRUE;
     }
 
     Destroy(Tempstr);
     Destroy(Token);
 
-    return(RetVal);
+    return(TRUE);
 }
 
 
@@ -520,6 +560,7 @@ static int HandleClientRequest(STREAM *S, TPeerInfo *Peer, const char *AuthTypes
 
 void HandleClient(STREAM *S)
 {
+    char *Tempstr=NULL;
     TPeerInfo *PI;
     pid_t pid;
 
@@ -529,7 +570,9 @@ void HandleClient(STREAM *S)
         PI=GetPeerInfo(S->in_fd);
 
 //get request from client
-        HandleClientRequest(S, PI, "");
+
+        Tempstr=CopyStr(Tempstr, ParserGetValue(Config, "auth_methods"));
+        while (HandleClientRequest(S, PI, Tempstr));
 
         DestroyPeerInfo(PI);
         STREAMClose(S);
@@ -538,6 +581,8 @@ void HandleClient(STREAM *S)
 
     STREAMClose(S);
     waitpid(-1, NULL, WNOHANG);
+
+    Destroy(Tempstr);
 }
 
 
@@ -581,18 +626,21 @@ int main(int argc, char *argv[])
 
     Listeners=ListCreate();
     S=STREAMServerInit("unix:/dev/invocation");
-    chmod("/dev/invocation", 0666);
-    if (S) ListAddItem(Listeners, S);
-
-    if (! (Flags & FLAG_NODEMON)) demonize();
-
-    while (1)
+    if (S)
     {
-        S=STREAMSelect(Listeners, NULL);
-        if (S)
+        chmod("/dev/invocation", 0666);
+        ListAddItem(Listeners, S);
+
+        if (! (Flags & FLAG_NODEMON)) demonize();
+
+        while (1)
         {
-            Client=STREAMServerAccept(S);
-            HandleClient(Client);
+            S=STREAMSelect(Listeners, NULL);
+            if (S)
+            {
+                Client=STREAMServerAccept(S);
+                HandleClient(Client);
+            }
         }
     }
 

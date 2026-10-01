@@ -1,0 +1,7 @@
+v2.0 (2026-10-01)
+  * Use latest libUseful and include it as 'libUseful-bundled'
+  * added authentication system and pam_invocation.so PAM module
+  * fix bugs caused by changes in libUseful DataParser and 'config' file type
+
+v1.0 (2022-08-16)
+  * Initial Release

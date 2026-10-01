@@ -1,9 +1,16 @@
+CC=@CC@
 FLAGS=-g @DEFS@
-all: invoked invoke grant test
+prefix=@prefix@
+exec_prefix=@exec_prefix@
+bindir=@bindir@
+mandir=@mandir@
 SERVER_OBJ=common.o peer.o appdb.o auth.o book_inout.o
 CLIENT_OBJ=common.o peer.o
 GRANT_OBJ=common.o appdb.o peer.o 
-LIBS=@LIBS@ -lpam @LIBUSEFUL_BUNDLED@ 
+LIBS=@LIBS@ @LIBUSEFUL_BUNDLED@ 
+INSTALLABLES=@INSTALLABLES@
+
+all: $(INSTALLABLES)
 
 invoked: $(SERVER_OBJ) server.c @LIBUSEFUL_BUNDLED@
 	$(CC) $(FLAGS) -oinvoked $(SERVER_OBJ) server.c $(LIBS)
@@ -29,11 +36,21 @@ auth.o: auth.h auth.c
 book_inout.o: book_inout.h book_inout.c
 	$(CC) $(FLAGS) -c book_inout.c
 
-libUseful-4/libUseful.a:
-	$(MAKE) -C libUseful-4
+pam_invocation.so: pam_invocation.c
+	$(CC) $(FLAGS) -opam_invocation.so -shared -lpam pam_invocation.c
+
+libUseful-bundled/libUseful.a:
+	$(MAKE) -C libUseful-bundled
 
 clean:
-	rm -f *.o */*.o */*.so */*.a invoked invoke grant
+	rm -f *.o */*.o */*.so */*.a *.orig invoked invoke grant *.so
 
 test:
 	echo "no tests"
+
+
+install: $(INSTALLABLES)
+	cp invoked $(prefix)/sbin
+	cp invoke $(bindir)
+	cp pam_invocation.so /lib/security
+
