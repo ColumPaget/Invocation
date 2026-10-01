@@ -68,12 +68,15 @@ fi
 
 if test "$cf_have_libpam" == "yes" -a "$cf_have_pam_header" = "yes"
 then
+cf_build_pam_module="yes"
 AC_SUBST([INSTALLABLES], "invoked invoke grant pam_invocation.so")
 else
 AC_SUBST([INSTALLABLES], "invoked invoke grant")
 fi
 
 
+echo
+echo
 echo "Build settings"
 
 if test "$cf_have_libUseful" = "yes" 
@@ -83,5 +86,20 @@ else
 echo "using BUNDLED libUseful"
 fi
 
+if test "$cf_have_libpam" == "yes" -a "$cf_have_pam_header" = "yes" -a "$cf_use_pam" = "yes"
+then
+echo "building with support for authenticating via PAM"
+else
+echo "building WITHOUT support for PAM authentication"
+fi
+
+if test "$cf_build_pam_module" = "yes"
+then
+echo "build with PAM module 'pam_invocation.so', allowing PAM aware apps to authenticate via invocation"
+else
+echo "build WITHOUT PAM module 'pam_invocation.so'"
+fi
+
+echo
 
 AC_OUTPUT(Makefile)
